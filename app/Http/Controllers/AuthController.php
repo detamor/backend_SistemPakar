@@ -304,12 +304,12 @@ class AuthController extends Controller
     }
 
     /**
-     * Login
+     * Login - Support email atau nomor WhatsApp
      */
     public function login(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'email' => 'required|email',
+            'email' => 'required|string', // Changed from 'email' to 'string' to accept both email and phone
             'password' => 'required|string',
         ]);
 
@@ -320,12 +320,44 @@ class AuthController extends Controller
             ], 422);
         }
 
-        $user = User::where('email', $request->email)->first();
+        $identifier = trim($request->email); // Bisa email atau nomor WhatsApp
+        
+        // Cek apakah input adalah email atau nomor WhatsApp
+        $isEmail = filter_var($identifier, FILTER_VALIDATE_EMAIL);
+        
+        if ($isEmail) {
+            // Login dengan email
+            $user = User::where('email', $identifier)->first();
+        } else {
+            // Login dengan nomor WhatsApp
+            // Normalisasi nomor WhatsApp (hapus karakter non-digit)
+            $digitsOnly = preg_replace('/[^0-9]/', '', $identifier);
+            
+            // Normalisasi ke format standar (62xxxxxxxxxxx)
+            $normalized = $digitsOnly;
+            if (strpos($normalized, '0') === 0) {
+                // Jika dimulai dengan 0, ganti dengan 62
+                $normalized = '62' . substr($normalized, 1);
+            } elseif (strpos($normalized, '62') !== 0) {
+                // Jika tidak dimulai dengan 62 atau 0, tambahkan 62
+                $normalized = '62' . $normalized;
+            }
+            
+            // Cari user dengan berbagai variasi format nomor WhatsApp
+            $user = User::where(function($query) use ($identifier, $digitsOnly, $normalized) {
+                // Exact match dengan format asli
+                $query->where('whatsapp_number', $identifier)
+                      // Match dengan digits only
+                      ->orWhereRaw("REPLACE(REPLACE(REPLACE(whatsapp_number, '+', ''), '-', ''), ' ', '') = ?", [$digitsOnly])
+                      // Match dengan format normalisasi
+                      ->orWhereRaw("REPLACE(REPLACE(REPLACE(whatsapp_number, '+', ''), '-', ''), ' ', '') = ?", [$normalized]);
+            })->first();
+        }
 
         if (!$user || !Hash::check($request->password, $user->password)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Email atau password salah.'
+                'message' => 'Email/nomor WhatsApp atau password salah.'
             ], 401);
         }
 
@@ -505,10 +537,43 @@ class AuthController extends Controller
      */
     public function me(Request $request)
     {
+        try {
+            $user = $request->user();
+            
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'User tidak terautentikasi'
+                ], 401);
+            }
+            
+            // Return user data tanpa relasi untuk menghindari error
         return response()->json([
             'success' => true,
-            'data' => $request->user()
+                'data' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'whatsapp_number' => $user->whatsapp_number,
+                    'role' => $user->role,
+                    'photo' => $user->photo,
+                    'is_verified' => $user->is_verified,
+                    'created_at' => $user->created_at,
+                    'updated_at' => $user->updated_at,
+                ]
         ], 200);
+        } catch (\Exception $e) {
+            Log::error('Error in AuthController::me', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat mengambil data user',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 }
 

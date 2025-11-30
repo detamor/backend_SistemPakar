@@ -13,11 +13,14 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // User::factory(10)->create();
-
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
+        // Seed data untuk testing
+        $this->call([
+            AdminUserSeeder::class, // Buat admin user
+            PlantSeeder::class,
+            SymptomSeeder::class,
+            DiseaseSeeder::class,
+            BonsaiDiseaseSeeder::class, // Gejala dan penyakit untuk Bonsai dengan CF
+            CertaintyFactorLevelSeeder::class, // Bobot nilai CF
         ]);
     }
 }

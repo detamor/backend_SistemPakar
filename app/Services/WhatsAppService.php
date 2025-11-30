@@ -172,6 +172,359 @@ class WhatsAppService
     }
 
     /**
+     * Mengirim file/document via WhatsApp menggunakan URL (Fonte API)
+     * 
+     * Fonte API memerlukan URL publik untuk file, bukan upload langsung
+     * 
+     * @param string $phoneNumber Nomor tujuan
+     * @param string $fileUrl URL publik file yang akan dikirim
+     * @param string $filename Nama file (opsional)
+     * @param string $caption Caption untuk file (opsional)
+     * @return array
+     */
+    public function sendDocumentByUrl($phoneNumber, $fileUrl, $filename = '', $caption = '')
+    {
+        try {
+            $phoneNumber = $this->formatPhoneNumber($phoneNumber);
+            
+            if (empty($this->apiKey)) {
+                Log::error('Fonte API Key tidak dikonfigurasi');
+                return [
+                    'success' => false,
+                    'error' => 'Fonte API Key tidak dikonfigurasi'
+                ];
+            }
+
+            // Fonte API menggunakan parameter 'url' untuk mengirim file sebagai document
+            // Endpoint: /send dengan parameter url (akan otomatis dikirim sebagai file attachment)
+            // Catatan: URL harus bisa diakses publik (tidak bisa localhost tanpa tunneling)
+            $requestData = [
+                'target' => $phoneNumber,
+                'message' => $caption ?: '📎 File terlampir',
+                'url' => $fileUrl
+                // Fonte API akan otomatis detect file type dari URL
+            ];
+
+            if ($filename) {
+                $requestData['filename'] = $filename;
+            }
+
+            Log::info('Fonte API Send Document by URL (metode utama untuk Fonte gratis)', [
+                'api_url' => $this->baseUrl . '/send',
+                'target' => $phoneNumber,
+                'file_url' => $fileUrl,
+                'filename' => $filename,
+                'caption_length' => strlen($caption)
+            ]);
+
+            $response = Http::withHeaders([
+                'Authorization' => $this->apiKey,
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ])->timeout(30)->post($this->baseUrl . '/send', $requestData);
+
+            Log::info('Fonte API Send Document Response', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+                'phone' => $phoneNumber
+            ]);
+
+            if ($response->successful()) {
+                $responseData = $response->json();
+                if (isset($responseData['status']) && $responseData['status'] === true) {
+                    Log::info('✅ PDF berhasil dikirim via Fonte API menggunakan URL', [
+                        'phone' => $phoneNumber,
+                        'file_url' => $fileUrl,
+                        'filename' => $filename,
+                        'response' => $responseData
+                    ]);
+                    return [
+                        'success' => true,
+                        'data' => $responseData,
+                        'message' => 'File PDF berhasil dikirim sebagai attachment via URL'
+                    ];
+                } else {
+                    $reason = $responseData['reason'] ?? $responseData['message'] ?? 'Unknown error';
+                    Log::warning('❌ Fonte API returned status false untuk document URL', [
+                        'reason' => $reason,
+                        'file_url' => $fileUrl,
+                        'response' => $responseData
+                    ]);
+                    return [
+                        'success' => false,
+                        'error' => $reason,
+                        'details' => $responseData
+                    ];
+                }
+            }
+
+            $errorData = $response->json();
+            return [
+                'success' => false,
+                'error' => $errorData['message'] ?? $errorData['reason'] ?? 'Gagal mengirim file',
+                'details' => $errorData
+            ];
+
+        } catch (\Exception $e) {
+            Log::error('Error sending document via WhatsApp', [
+                'error' => $e->getMessage(),
+                'phone' => $phoneNumber,
+                'file_url' => $fileUrl
+            ]);
+
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Mengirim file/document via WhatsApp menggunakan file lokal (CURLFile)
+     * 
+     * Menggunakan file path lokal dari storage, bukan URL publik
+     * Cocok untuk localhost atau ketika file sudah ada di server
+     * 
+     * @param string $phoneNumber Nomor tujuan
+     * @param string $filePath Path file lokal (relative dari storage/app/public atau absolute path)
+     * @param string $filename Nama file (opsional)
+     * @param string $caption Caption untuk file (opsional)
+     * @return array
+     */
+    public function sendDocumentByFile($phoneNumber, $filePath, $filename = '', $caption = '')
+    {
+        try {
+            $phoneNumber = $this->formatPhoneNumber($phoneNumber);
+            
+            if (empty($this->apiKey)) {
+                Log::error('Fonte API Key tidak dikonfigurasi');
+                return [
+                    'success' => false,
+                    'error' => 'Fonte API Key tidak dikonfigurasi'
+                ];
+            }
+
+            // Resolve file path
+            // Jika relative path (misal: pdfs/diagnosis-5.pdf), convert ke absolute path
+            $absolutePath = null;
+            if (file_exists($filePath)) {
+                // Sudah absolute path
+                $absolutePath = $filePath;
+            } else {
+                // Coba dari storage/app/public
+                $storagePath = storage_path('app/public/' . ltrim($filePath, '/'));
+                if (file_exists($storagePath)) {
+                    $absolutePath = $storagePath;
+                } else {
+                    // Coba dari public/storage (jika storage link sudah dibuat)
+                    $publicPath = public_path('storage/' . ltrim($filePath, '/'));
+                    if (file_exists($publicPath)) {
+                        $absolutePath = $publicPath;
+                    }
+                }
+            }
+
+            if (!$absolutePath || !file_exists($absolutePath)) {
+                Log::error('File tidak ditemukan', [
+                    'file_path' => $filePath,
+                    'tried_paths' => [
+                        $filePath,
+                        storage_path('app/public/' . ltrim($filePath, '/')),
+                        public_path('storage/' . ltrim($filePath, '/'))
+                    ]
+                ]);
+                return [
+                    'success' => false,
+                    'error' => 'File tidak ditemukan: ' . $filePath
+                ];
+            }
+
+            // Jika filename kosong, ambil dari path
+            if (empty($filename)) {
+                $filename = basename($absolutePath);
+            }
+
+            // Buat CURLFile untuk upload file
+            // Format sesuai dokumentasi Fonte: CURLFile(path) atau CURLFile(path, mime_type, filename)
+            $mimeType = mime_content_type($absolutePath) ?: 'application/pdf';
+            $curlFile = new \CURLFile($absolutePath, $mimeType, $filename);
+
+            // Prepare request data dengan multipart/form-data
+            // Sesuai dokumentasi Fonte API untuk send document:
+            // - target: nomor tujuan
+            // - message: caption/pesan
+            // - file: file attachment (CURLFile)
+            // - filename: nama file (opsional, tapi disarankan)
+            // Format request untuk Fonte API send document via file upload
+            // CATATAN: Fonte gratis mungkin tidak benar-benar support file upload
+            // Meskipun API return success, file mungkin tidak terkirim sebagai attachment
+            // Solusi: Gunakan URL publik (sendDocumentByUrl) sebagai metode utama
+            $requestData = [
+                'target' => $phoneNumber,
+                'message' => $caption ?: '📎 File terlampir',
+                'file' => $curlFile, // CURLFile untuk multipart upload
+                'filename' => $filename // Nama file untuk ditampilkan di WhatsApp
+            ];
+            
+            Log::warning('⚠️ Menggunakan file upload - Fonte gratis mungkin tidak support!', [
+                'suggestion' => 'Gunakan sendDocumentByUrl dengan URL publik untuk hasil yang lebih reliable'
+            ]);
+
+            // Verifikasi file sebelum kirim
+            $fileSize = filesize($absolutePath);
+            $isReadable = is_readable($absolutePath);
+            
+            Log::info('Fonte API Send Document by Local File', [
+                'url' => $this->baseUrl . '/send',
+                'target' => $phoneNumber,
+                'file_path' => $absolutePath,
+                'filename' => $filename,
+                'file_size' => $fileSize,
+                'file_exists' => file_exists($absolutePath),
+                'is_readable' => $isReadable,
+                'mime_type' => $mimeType,
+                'curl_file_class' => get_class($curlFile),
+                'curl_file_path' => $curlFile->getFilename(),
+                'curl_file_mime' => $curlFile->getMimeType(),
+                'curl_file_postname' => $curlFile->getPostFilename()
+            ]);
+            
+            if (!$isReadable || $fileSize === false) {
+                Log::error('File tidak dapat dibaca', [
+                    'file_path' => $absolutePath,
+                    'is_readable' => $isReadable,
+                    'file_size' => $fileSize
+                ]);
+                return [
+                    'success' => false,
+                    'error' => 'File tidak dapat dibaca: ' . $absolutePath
+                ];
+            }
+
+            // Gunakan curl langsung untuk multipart/form-data
+            // PENTING: Jangan set Content-Type header, biarkan curl set otomatis untuk multipart
+            $ch = curl_init();
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $this->baseUrl . '/send',
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $requestData, // CURLFile akan otomatis membuat multipart/form-data
+                CURLOPT_HTTPHEADER => [
+                    'Authorization: ' . $this->apiKey
+                    // Jangan set Content-Type, biarkan curl set otomatis untuk multipart/form-data
+                ],
+                CURLOPT_TIMEOUT => 60, // Timeout lebih lama untuk upload file
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                CURLOPT_VERBOSE => false, // Set true untuk debugging
+            ]);
+
+            $responseBody = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
+            
+            // Cleanup curl resource (curl_close deprecated in PHP 8.0+)
+            if (is_resource($ch)) {
+                curl_close($ch);
+            } else {
+                unset($ch);
+            }
+
+            if ($curlError) {
+                Log::error('CURL Error sending document', [
+                    'error' => $curlError,
+                    'phone' => $phoneNumber
+                ]);
+                return [
+                    'success' => false,
+                    'error' => 'CURL Error: ' . $curlError
+                ];
+            }
+
+            Log::info('Fonte API Send Document by File Response', [
+                'status' => $httpCode,
+                'body' => $responseBody,
+                'phone' => $phoneNumber,
+                'response_length' => strlen($responseBody)
+            ]);
+
+            $responseData = json_decode($responseBody, true);
+
+            // Log response data untuk debugging
+            if ($responseData) {
+                Log::info('Fonte API Response Data', [
+                    'status' => $responseData['status'] ?? null,
+                    'reason' => $responseData['reason'] ?? null,
+                    'message' => $responseData['message'] ?? null,
+                    'full_response' => $responseData
+                ]);
+            } else {
+                Log::warning('Fonte API Response tidak valid JSON', [
+                    'raw_response' => $responseBody
+                ]);
+            }
+
+            if ($httpCode === 200) {
+                if (isset($responseData['status']) && $responseData['status'] === true) {
+                    Log::info('PDF berhasil dikirim via Fonte API sebagai attachment', [
+                        'phone' => $phoneNumber,
+                        'filename' => $filename,
+                        'response' => $responseData
+                    ]);
+                    return [
+                        'success' => true,
+                        'data' => $responseData,
+                        'message' => 'File PDF berhasil dikirim sebagai attachment'
+                    ];
+                } else {
+                    // Status false atau tidak ada status
+                    $reason = $responseData['reason'] ?? $responseData['message'] ?? 'Unknown error';
+                    Log::warning('Fonte API returned status false untuk document', [
+                        'reason' => $reason,
+                        'http_code' => $httpCode,
+                        'full_response' => $responseData,
+                        'raw_response' => substr($responseBody, 0, 500)
+                    ]);
+                    return [
+                        'success' => false,
+                        'error' => $reason,
+                        'details' => $responseData,
+                        'http_code' => $httpCode
+                    ];
+                }
+            } else {
+                // HTTP error
+                $reason = $responseData['reason'] ?? $responseData['message'] ?? 'HTTP Error: ' . $httpCode;
+                Log::error('Fonte API HTTP error saat mengirim document', [
+                    'http_code' => $httpCode,
+                    'reason' => $reason,
+                    'response' => $responseData,
+                    'raw_response' => substr($responseBody, 0, 500)
+                ]);
+                return [
+                    'success' => false,
+                    'error' => $reason,
+                    'details' => $responseData,
+                    'http_code' => $httpCode
+                ];
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Error sending document via WhatsApp (local file)', [
+                'error' => $e->getMessage(),
+                'phone' => $phoneNumber,
+                'file_path' => $filePath,
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return [
+                'success' => false,
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+
+    /**
      * Mengirim OTP via WhatsApp
      */
     public function sendOtp($phoneNumber, $otpCode)

@@ -12,6 +12,7 @@ class EducationalModule extends Model
 
     protected $fillable = [
         'title',
+        'description',
         'content',
         'category',
         'image',

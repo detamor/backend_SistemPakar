@@ -45,6 +45,9 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 Route::prefix('public')->group(function () {
     Route::get('/plants', [DiagnosisController::class, 'getPlants']);
     Route::get('/symptoms', [DiagnosisController::class, 'getSymptoms']);
+    Route::get('/cf-levels', [\App\Http\Controllers\Admin\KnowledgeBaseController::class, 'getCFLevels']);
+    // Endpoint untuk Python engine (tidak perlu auth)
+    Route::get('/diseases/plant/{plantId}', [\App\Http\Controllers\Admin\KnowledgeBaseController::class, 'getDiseasesByPlant']);
 });
 
 // Diagnosis Routes
@@ -53,6 +56,12 @@ Route::prefix('diagnosis')->middleware('auth:sanctum')->group(function () {
     Route::get('/history', [DiagnosisController::class, 'getHistory']);
     Route::get('/{id}', [DiagnosisController::class, 'getDetail']);
     Route::get('/{id}/pdf', [DiagnosisController::class, 'downloadPdf']);
+});
+
+// Feedback Routes
+Route::prefix('feedback')->middleware('auth:sanctum')->group(function () {
+    Route::post('/', [\App\Http\Controllers\FeedbackController::class, 'store']);
+    Route::get('/diagnosis/{diagnosisId}', [\App\Http\Controllers\FeedbackController::class, 'show']);
 });
 
 // Educational Modules Routes
@@ -68,6 +77,8 @@ Route::prefix('education')->middleware('auth:sanctum')->group(function () {
 Route::prefix('consultation')->middleware('auth:sanctum')->group(function () {
     Route::post('/', [ExpertConsultationController::class, 'create']);
     Route::get('/', [ExpertConsultationController::class, 'index']);
+    Route::post('/upload-pdf', [ExpertConsultationController::class, 'uploadPdf']);
+    Route::post('/whatsapp', [ExpertConsultationController::class, 'sendWhatsAppWithPdf']);
 });
 
 // Profile Routes
@@ -75,6 +86,7 @@ Route::prefix('profile')->middleware('auth:sanctum')->group(function () {
     Route::get('/', [\App\Http\Controllers\ProfileController::class, 'show']);
     Route::post('/update', [\App\Http\Controllers\ProfileController::class, 'update']);
     Route::post('/change-password', [\App\Http\Controllers\ProfileController::class, 'changePassword']);
+    Route::delete('/photo', [\App\Http\Controllers\ProfileController::class, 'removePhoto']);
 });
 
 // Admin Routes - Knowledge Base Management
@@ -114,6 +126,17 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('/symptoms', [KnowledgeBaseController::class, 'storeSymptom']);
     Route::put('/symptoms/{id}', [KnowledgeBaseController::class, 'updateSymptom']);
     Route::delete('/symptoms/{id}', [KnowledgeBaseController::class, 'destroySymptom']);
+    
+    // Certainty Factor Matrix Management
+    Route::get('/cf-matrix', [KnowledgeBaseController::class, 'getCFMatrix']);
+    Route::post('/cf-matrix/update', [KnowledgeBaseController::class, 'updateCFValue']);
+    
+    // Certainty Factor Levels Management
+    Route::get('/cf-levels', [KnowledgeBaseController::class, 'getAllCFLevels']);
+    Route::get('/cf-levels/{id}', [KnowledgeBaseController::class, 'showCFLevel']);
+    Route::post('/cf-levels', [KnowledgeBaseController::class, 'storeCFLevel']);
+    Route::put('/cf-levels/{id}', [KnowledgeBaseController::class, 'updateCFLevel']);
+    Route::delete('/cf-levels/{id}', [KnowledgeBaseController::class, 'destroyCFLevel']);
 });
 
 // WhatsApp API Routes

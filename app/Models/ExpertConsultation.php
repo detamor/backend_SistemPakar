@@ -18,6 +18,7 @@ class ExpertConsultation extends Model
         'expert_response',
         'status',
         'whatsapp_message_id',
+        'pdf_path',
     ];
 
     /**

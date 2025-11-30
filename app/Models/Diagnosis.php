@@ -18,12 +18,18 @@ class Diagnosis extends Model
         'plant_id',
         'disease_id',
         'certainty_value',
+        'recommendation',
+        'all_possibilities_json',
+        'matched_symptoms_count',
         'user_notes',
         'status',
+        'pdf_path',
     ];
 
     protected $casts = [
         'certainty_value' => 'decimal:2',
+        'all_possibilities_json' => 'array',
+        'matched_symptoms_count' => 'integer',
     ];
 
     /**
@@ -65,7 +71,7 @@ class Diagnosis extends Model
      */
     public function feedback(): HasOne
     {
-        return $this->hasOne(Feedback::class);
+        return $this->hasOne(Feedback::class, 'diagnosis_id');
     }
 
     /**

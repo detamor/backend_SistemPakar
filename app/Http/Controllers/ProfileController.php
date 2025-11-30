@@ -107,6 +107,29 @@ class ProfileController extends Controller
             'data' => auth()->user()
         ], 200);
     }
+
+    /**
+     * Remove photo
+     */
+    public function removePhoto()
+    {
+        $user = auth()->user();
+
+        // Delete photo from storage
+        if ($user->photo && Storage::disk('public')->exists($user->photo)) {
+            Storage::disk('public')->delete($user->photo);
+        }
+
+        // Remove photo from user record
+        $user->photo = null;
+        $user->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Foto profil berhasil dihapus',
+            'data' => $user
+        ], 200);
+    }
 }
 
 

@@ -10,23 +10,52 @@ use Illuminate\Support\Facades\Validator;
 class EducationalModuleController extends Controller
 {
     /**
+     * Helper method untuk menambahkan CORS headers ke response
+     */
+    protected function addCorsHeaders($response)
+    {
+        $response->headers->set('Access-Control-Allow-Origin', '*');
+        $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+        $response->headers->set('Access-Control-Allow-Credentials', 'true');
+        
+        return $response;
+    }
+
+    /**
      * Mendapatkan semua modul edukasi
      */
     public function index(Request $request)
     {
-        $category = $request->query('category');
-        $query = EducationalModule::where('is_active', true);
-        
-        if ($category) {
-            $query->where('category', $category);
+        try {
+            $category = $request->query('category');
+            $query = EducationalModule::where('is_active', true);
+            
+            if ($category) {
+                $query->where('category', $category);
+            }
+            
+            $modules = $query->orderBy('created_at', 'desc')->paginate(10);
+            
+            $this->addCorsHeaders($response = response()->json([
+                'success' => true,
+                'data' => $modules
+            ]));
+            
+            return $response;
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Error getting education modules', [
+                'error' => $e->getMessage()
+            ]);
+
+            $this->addCorsHeaders($response = response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat mengambil modul edukasi',
+                'error' => $e->getMessage()
+            ], 500));
+            
+            return $response;
         }
-        
-        $modules = $query->orderBy('created_at', 'desc')->paginate(10);
-        
-        return response()->json([
-            'success' => true,
-            'data' => $modules
-        ]);
     }
 
     /**
@@ -34,24 +63,48 @@ class EducationalModuleController extends Controller
      */
     public function show($id)
     {
-        $module = EducationalModule::findOrFail($id);
-        
-        // Increment view count
-        $module->increment('view_count');
-        
-        // Cek apakah user sudah bookmark
-        $isBookmarked = false;
-        if (auth()->check()) {
-            $isBookmarked = Bookmark::where('user_id', auth()->id())
-                ->where('educational_module_id', $id)
-                ->exists();
+        try {
+            $module = EducationalModule::findOrFail($id);
+            
+            // Increment view count
+            $module->increment('view_count');
+            
+            // Cek apakah user sudah bookmark
+            $isBookmarked = false;
+            if (auth()->check()) {
+                $isBookmarked = Bookmark::where('user_id', auth()->id())
+                    ->where('educational_module_id', $id)
+                    ->exists();
+            }
+            
+            $this->addCorsHeaders($response = response()->json([
+                'success' => true,
+                'data' => $module,
+                'is_bookmarked' => $isBookmarked
+            ]));
+            
+            return $response;
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            $this->addCorsHeaders($response = response()->json([
+                'success' => false,
+                'message' => 'Modul edukasi tidak ditemukan'
+            ], 404));
+            
+            return $response;
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Error getting education module detail', [
+                'error' => $e->getMessage(),
+                'module_id' => $id
+            ]);
+
+            $this->addCorsHeaders($response = response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat mengambil detail modul',
+                'error' => $e->getMessage()
+            ], 500));
+            
+            return $response;
         }
-        
-        return response()->json([
-            'success' => true,
-            'data' => $module,
-            'is_bookmarked' => $isBookmarked
-        ]);
     }
 
     /**
@@ -59,18 +112,35 @@ class EducationalModuleController extends Controller
      */
     public function bookmark($id)
     {
-        $user = auth()->user();
-        
-        $bookmark = Bookmark::firstOrCreate([
-            'user_id' => $user->id,
-            'educational_module_id' => $id
-        ]);
-        
-        return response()->json([
-            'success' => true,
-            'message' => 'Modul berhasil di-bookmark',
-            'data' => $bookmark
-        ]);
+        try {
+            $user = auth()->user();
+            
+            $bookmark = Bookmark::firstOrCreate([
+                'user_id' => $user->id,
+                'educational_module_id' => $id
+            ]);
+            
+            $this->addCorsHeaders($response = response()->json([
+                'success' => true,
+                'message' => 'Modul berhasil di-bookmark',
+                'data' => $bookmark
+            ]));
+            
+            return $response;
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Error bookmarking module', [
+                'error' => $e->getMessage(),
+                'module_id' => $id
+            ]);
+
+            $this->addCorsHeaders($response = response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat bookmark modul',
+                'error' => $e->getMessage()
+            ], 500));
+            
+            return $response;
+        }
     }
 
     /**
@@ -78,16 +148,33 @@ class EducationalModuleController extends Controller
      */
     public function unbookmark($id)
     {
-        $user = auth()->user();
-        
-        Bookmark::where('user_id', $user->id)
-            ->where('educational_module_id', $id)
-            ->delete();
-        
-        return response()->json([
-            'success' => true,
-            'message' => 'Bookmark berhasil dihapus'
-        ]);
+        try {
+            $user = auth()->user();
+            
+            Bookmark::where('user_id', $user->id)
+                ->where('educational_module_id', $id)
+                ->delete();
+            
+            $this->addCorsHeaders($response = response()->json([
+                'success' => true,
+                'message' => 'Bookmark berhasil dihapus'
+            ]));
+            
+            return $response;
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Error unbookmarking module', [
+                'error' => $e->getMessage(),
+                'module_id' => $id
+            ]);
+
+            $this->addCorsHeaders($response = response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat menghapus bookmark',
+                'error' => $e->getMessage()
+            ], 500));
+            
+            return $response;
+        }
     }
 
     /**
@@ -95,17 +182,33 @@ class EducationalModuleController extends Controller
      */
     public function getBookmarks()
     {
-        $user = auth()->user();
-        
-        $bookmarks = Bookmark::where('user_id', $user->id)
-            ->with('educationalModule')
-            ->orderBy('created_at', 'desc')
-            ->get();
-        
-        return response()->json([
-            'success' => true,
-            'data' => $bookmarks
-        ]);
+        try {
+            $user = auth()->user();
+            
+            $bookmarks = Bookmark::where('user_id', $user->id)
+                ->with('educationalModule')
+                ->orderBy('created_at', 'desc')
+                ->get();
+            
+            $this->addCorsHeaders($response = response()->json([
+                'success' => true,
+                'data' => $bookmarks
+            ]));
+            
+            return $response;
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Error getting bookmarks', [
+                'error' => $e->getMessage()
+            ]);
+
+            $this->addCorsHeaders($response = response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat mengambil bookmark',
+                'error' => $e->getMessage()
+            ], 500));
+            
+            return $response;
+        }
     }
 }
 
