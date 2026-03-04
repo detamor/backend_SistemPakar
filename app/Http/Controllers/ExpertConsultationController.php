@@ -50,25 +50,9 @@ class ExpertConsultationController extends Controller
             'status' => 'pending',
         ]);
 
-        // Kirim notifikasi ke expert via WhatsApp
-        if ($expertWhatsapp) {
-            $diagnosis = $request->diagnosis_id 
-                ? Diagnosis::with(['plant', 'disease'])->find($request->diagnosis_id)
-                : null;
-
-            $message = $this->formatConsultationMessage($user, $consultation, $diagnosis, $consultation->message);
-            
-            $whatsappResult = $this->whatsappService->sendMessage(
-                $expertWhatsapp,
-                $message
-            );
-
-            if ($whatsappResult['success']) {
-                $consultation->update([
-                    'whatsapp_message_id' => $whatsappResult['data']['message_id'] ?? null
-                ]);
-            }
-        }
+        // Pengiriman WhatsApp dihapus dari sini agar tidak dobel.
+        // Pengiriman pesan hanya dilakukan melalui method sendWhatsAppWithPdf
+        // yang dipanggil oleh frontend setelah proses create.
 
         return response()->json([
             'success' => true,
@@ -309,107 +293,36 @@ class ExpertConsultationController extends Controller
             // Kirim PDF sebagai document attachment menggunakan file lokal (CURLFile)
             // Jika ada PDF, kirim langsung dengan file attachment (termasuk message di caption)
             // Jika tidak ada PDF, kirim message biasa
-            if ($pdfPath) {
-                try {
-                    // Verifikasi file benar-benar ada sebelum kirim
-                    $storagePath = storage_path('app/public/' . ltrim($pdfPath, '/'));
-                    if (!file_exists($storagePath)) {
-                        Log::error('PDF file tidak ditemukan di storage', [
-                            'pdf_path' => $pdfPath,
-                            'storage_path' => $storagePath,
-                            'consultation_id' => $consultation->id
-                        ]);
-                        $pdfError = 'PDF file tidak ditemukan di storage';
-                        // Fallback: kirim message biasa tanpa PDF
-                        $whatsappResult = $this->whatsappService->sendMessage(
-                            $expertWhatsapp,
-                            $message
-                        );
-                    } else {
-                        // SOLUSI: Karena semua tunnel bayar dan Fonte gratis tidak support attachment
-                        // Langsung kirim link PDF di message WhatsApp (tanpa attachment)
-                        // Pakar bisa klik link untuk download PDF dari sistem
-                        try {
-                            // Generate URL untuk PDF
-                            $pdfUrl = Storage::disk('public')->url($pdfPath);
-                            $appUrl = env('APP_URL', 'http://localhost:8000');
-                            $baseUrl = rtrim($appUrl, '/');
-                            $fullUrl = $baseUrl . $pdfUrl;
-                            
-                            // Format message dengan link PDF
-                            $messageWithPdfLink = $message . "\n\n" .
-                                "📎 *Laporan Diagnosis PDF*\n\n" .
-                                "ID: {$diagnosis->id}\n" .
-                                "Tanaman: " . ($diagnosis->plant->name ?? '-') . "\n" .
-                                "Hasil: " . ($diagnosis->disease->name ?? 'Belum ada hasil') . "\n" .
-                                "Tingkat Kepastian: " . ($diagnosis->certainty_value ? (($diagnosis->certainty_value * 100) . '%') : '-') . "\n\n" .
-                                "🔗 *Download PDF:*\n" . $fullUrl . "\n\n" .
-                                "💡 Klik link di atas untuk download PDF hasil diagnosis lengkap.\n" .
-                                "📱 File PDF berisi informasi lengkap tentang diagnosis, solusi, dan pencegahan.";
-                            
-                            Log::info('Mengirim konsultasi dengan link PDF (tanpa attachment)', [
-                                'consultation_id' => $consultation->id,
-                                'diagnosis_id' => $diagnosis->id,
-                                'pdf_path' => $pdfPath,
-                                'pdf_url' => $fullUrl,
-                                'reason' => 'Fonte gratis tidak support file attachment, menggunakan link download'
-                            ]);
-                            
-                            // Kirim message dengan link PDF
-                            $whatsappResult = $this->whatsappService->sendMessage(
-                                $expertWhatsapp,
-                                $messageWithPdfLink
-                            );
-                            
-                            // Set pdfSent = false karena tidak terkirim sebagai attachment
-                            // Tapi link sudah dikirim di message
-                            $pdfSent = false;
-                            
-                            if ($whatsappResult['success']) {
-                                Log::info('✅ Konsultasi dengan link PDF berhasil dikirim', [
-                                    'consultation_id' => $consultation->id,
-                                    'pdf_url' => $fullUrl
-                                ]);
-                            } else {
-                                Log::warning('❌ Gagal mengirim konsultasi dengan link PDF', [
-                                    'error' => $whatsappResult['error'] ?? 'Unknown error',
-                                    'consultation_id' => $consultation->id
-                                ]);
-                            }
-                        } catch (\Exception $error) {
-                            $pdfError = $error->getMessage();
-                            Log::error('Error saat mengirim konsultasi dengan link PDF', [
-                                'error' => $error->getMessage(),
-                                'consultation_id' => $consultation->id,
-                                'trace' => $error->getTraceAsString()
-                            ]);
-                            // Fallback: kirim message biasa tanpa link
-                            $whatsappResult = $this->whatsappService->sendMessage(
-                                $expertWhatsapp,
-                                $message . "\n\n⚠️ PDF hasil diagnosis tersedia di sistem. Silakan login untuk download."
-                            );
-                        }
-                    }
-                } catch (\Exception $e) {
-                    $pdfError = $e->getMessage();
-                    Log::error('Error sending PDF via WhatsApp', [
-                        'error' => $e->getMessage(),
-                        'consultation_id' => $consultation->id,
-                        'trace' => $e->getTraceAsString()
-                    ]);
-                    // Fallback: kirim message biasa jika error
-                    $whatsappResult = $this->whatsappService->sendMessage(
-                        $expertWhatsapp,
-                        $message
-                    );
+            // Cek apakah ada diagnosis untuk menambahkan info ke pesan
+            if ($diagnosis) {
+                // Pastikan folder pdfs ada (untuk mendukung pengunduhan manual di frontend)
+                if (!Storage::disk('public')->exists('pdfs')) {
+                    Storage::disk('public')->makeDirectory('pdfs');
                 }
-            } else {
-                // Tidak ada PDF, kirim message biasa
-                $whatsappResult = $this->whatsappService->sendMessage(
-                    $expertWhatsapp,
-                    $message
-                );
+                
+                // Jika PDF belum pernah di-generate, kita generate sekarang (agar siap diunduh user)
+                if (!$diagnosis->pdf_path || !Storage::disk('public')->exists($diagnosis->pdf_path)) {
+                    try {
+                        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('diagnosis.pdf', [
+                            'diagnosis' => $diagnosis,
+                            'user' => $user
+                        ]);
+                        $pdfPath = 'pdfs/diagnosis-' . $diagnosis->id . '.pdf';
+                        Storage::disk('public')->put($pdfPath, $pdf->output());
+                        $diagnosis->update(['pdf_path' => $pdfPath]);
+                    } catch (\Exception $pdfError) {
+                        Log::warning('Gagal pre-generate PDF: ' . $pdfError->getMessage());
+                    }
+                }
             }
+
+            // Kirim pesan teks standar ke Pakar
+            $whatsappResult = $this->whatsappService->sendMessage(
+                $expertWhatsapp,
+                $message
+            );
+            
+            $pdfSent = false;
             
             // Update consultation dengan PDF path dan WhatsApp message ID
             $updateData = [
@@ -477,6 +390,11 @@ class ExpertConsultationController extends Controller
         
         $consultationMessage = $messageText ?? $consultation->message;
         $message .= "💬 *Pesan Konsultasi:*\n{$consultationMessage}\n\n";
+        
+        if ($diagnosis) {
+            $message .= "*(Pesan: Saya akan melampirkan file Laporan PDF setelah pesan ini)*\n\n";
+        }
+        
         $message .= "Silakan balas konsultasi ini via WhatsApp atau melalui sistem.";
 
         return $message;

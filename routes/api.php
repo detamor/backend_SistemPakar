@@ -9,6 +9,7 @@ use App\Http\Controllers\ExpertConsultationController;
 use App\Http\Controllers\Admin\KnowledgeBaseController;
 use App\Http\Controllers\Admin\UserManagementController;
 use App\Http\Controllers\Admin\EducationalModuleController as AdminEducationalModuleController;
+use App\Http\Controllers\Admin\DashboardStatsController;
 use App\Http\Controllers\AuthController;
 
 /*
@@ -104,6 +105,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('/education', [AdminEducationalModuleController::class, 'store']);
     Route::put('/education/{id}', [AdminEducationalModuleController::class, 'update']);
     Route::delete('/education/{id}', [AdminEducationalModuleController::class, 'destroy']);
+    Route::post('/education/upload-image', [AdminEducationalModuleController::class, 'uploadContentImage']);
     
     // Diseases Management (F#12)
     Route::get('/diseases', [KnowledgeBaseController::class, 'getDiseases']);
@@ -117,7 +119,7 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::get('/plants', [KnowledgeBaseController::class, 'getPlants']);
     Route::get('/plants/{id}', [KnowledgeBaseController::class, 'showPlant']);
     Route::post('/plants', [KnowledgeBaseController::class, 'storePlant']);
-    Route::put('/plants/{id}', [KnowledgeBaseController::class, 'updatePlant']);
+    Route::match(['put', 'post'], '/plants/{id}', [KnowledgeBaseController::class, 'updatePlant']); // Support both PUT and POST for file uploads
     Route::delete('/plants/{id}', [KnowledgeBaseController::class, 'destroyPlant']);
     
     // Symptoms Management (F#12)
@@ -137,6 +139,10 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin'])->group(function ()
     Route::post('/cf-levels', [KnowledgeBaseController::class, 'storeCFLevel']);
     Route::put('/cf-levels/{id}', [KnowledgeBaseController::class, 'updateCFLevel']);
     Route::delete('/cf-levels/{id}', [KnowledgeBaseController::class, 'destroyCFLevel']);
+    
+    // Dashboard Stats
+    Route::get('/stats/quick', [DashboardStatsController::class, 'getQuickStats']);
+    Route::get('/stats/diagnosis', [DashboardStatsController::class, 'getDiagnosisStats']);
 });
 
 // WhatsApp API Routes

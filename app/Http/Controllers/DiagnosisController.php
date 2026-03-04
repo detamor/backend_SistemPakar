@@ -21,6 +21,26 @@ class DiagnosisController extends Controller
         try {
             $plants = Plant::where('is_active', true)->get();
             
+            // Format image URLs
+            $appUrl = env('APP_URL', 'http://localhost:8000');
+            // Ensure port is included for localhost
+            if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
+                $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
+            }
+            
+            $plants->transform(function($plant) use ($appUrl) {
+                $plantData = $plant->toArray();
+                
+                // Convert image path to URL
+                if ($plantData['image']) {
+                    if (!str_starts_with($plantData['image'], 'http')) {
+                        $plantData['image'] = $appUrl . '/storage/' . ltrim($plantData['image'], '/');
+                    }
+                }
+                
+                return $plantData;
+            });
+            
             $this->addCorsHeaders($response = response()->json([
                 'success' => true,
                 'data' => $plants
@@ -166,10 +186,22 @@ class DiagnosisController extends Controller
             ]);
             
             // Kirim request ke Python engine dengan retry dan timeout yang lebih panjang
-            // Kirim request ke Python engine dengan retry dan timeout yang lebih panjang
-            // Gunakan connect_timeout untuk menghindari timeout saat koneksi
-            $response = Http::timeout(120)
-                ->connectTimeout(10) // Timeout untuk koneksi awal
+            // Gunakan withOptions untuk memastikan timeout benar-benar diterapkan
+            Log::info('Preparing HTTP request to Python engine', [
+                'diagnosis_id' => $diagnosis->id,
+                'url' => "{$pythonApiUrl}/api/diagnose",
+                'timeout' => 120,
+                'connect_timeout' => 10
+            ]);
+            
+            $startTime = microtime(true);
+            
+            try {
+                $response = Http::withOptions([
+                    'timeout' => 120, // Total timeout 120 detik
+                    'connect_timeout' => 10, // Timeout koneksi 10 detik
+                    'verify' => false, // Disable SSL verification untuk localhost
+                ])
                 ->retry(2, 1000) // Retry 2 kali dengan delay 1 detik
                 ->post("{$pythonApiUrl}/api/diagnose", [
                     'diagnosis_id' => $diagnosis->id,
@@ -177,18 +209,32 @@ class DiagnosisController extends Controller
                     'symptoms' => $request->symptoms,
                     'diseases_data' => $diseasesData, // Kirim data penyakit langsung
                 ]);
-            
-            Log::info('HTTP request completed', [
-                'diagnosis_id' => $diagnosis->id,
-                'status_code' => $response->status(),
-                'has_body' => !empty($response->body())
-            ]);
-
-            Log::info('Python engine response received', [
-                'diagnosis_id' => $diagnosis->id,
-                'status' => $response->status(),
-                'successful' => $response->successful()
-            ]);
+                
+                $elapsedTime = microtime(true) - $startTime;
+                Log::info('HTTP request completed', [
+                    'diagnosis_id' => $diagnosis->id,
+                    'elapsed_time' => round($elapsedTime, 2) . ' seconds',
+                    'status_code' => $response->status()
+                ]);
+            } catch (\Illuminate\Http\Client\ConnectionException $e) {
+                $elapsedTime = microtime(true) - $startTime;
+                Log::error('Connection error to Python engine', [
+                    'diagnosis_id' => $diagnosis->id,
+                    'elapsed_time' => round($elapsedTime, 2) . ' seconds',
+                    'error' => $e->getMessage(),
+                    'url' => "{$pythonApiUrl}/api/diagnose"
+                ]);
+                throw $e;
+            } catch (\Exception $e) {
+                $elapsedTime = microtime(true) - $startTime;
+                Log::error('HTTP request error', [
+                    'diagnosis_id' => $diagnosis->id,
+                    'elapsed_time' => round($elapsedTime, 2) . ' seconds',
+                    'error' => $e->getMessage(),
+                    'error_type' => get_class($e)
+                ]);
+                throw $e;
+            }
 
             if ($response->successful()) {
                 try {
@@ -405,7 +451,7 @@ class DiagnosisController extends Controller
             $user = auth()->user();
             
             $diagnoses = Diagnosis::where('user_id', $user->id)
-                ->with(['plant', 'disease', 'symptoms'])
+                ->with(['plant', 'disease', 'symptoms', 'feedback'])
                 ->orderBy('created_at', 'desc')
                 ->paginate(10);
 
@@ -433,6 +479,7 @@ class DiagnosisController extends Controller
                         'name' => $diagnosis->disease->name,
                         'code' => $diagnosis->disease->code,
                     ] : null,
+                    'feedback' => $diagnosis->feedback,
                 ];
             });
 
@@ -467,7 +514,7 @@ class DiagnosisController extends Controller
     public function getDetail($id)
     {
         try {
-            $diagnosis = Diagnosis::with(['plant', 'disease', 'symptoms'])
+            $diagnosis = Diagnosis::with(['plant', 'disease', 'symptoms', 'feedback'])
                 ->where('user_id', auth()->id())
                 ->findOrFail($id);
 
@@ -508,6 +555,7 @@ class DiagnosisController extends Controller
                         'user_cf' => $symptom->pivot->user_cf ?? null,
                     ];
                 })->toArray() : [],
+                'feedback' => $diagnosis->feedback,
             ];
 
             $this->addCorsHeaders($response = response()->json([

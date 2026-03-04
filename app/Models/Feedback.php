@@ -10,6 +10,11 @@ class Feedback extends Model
 {
     use HasFactory;
 
+    /**
+     * Nama tabel di database
+     */
+    protected $table = 'feedbacks';
+
     protected $fillable = [
         'user_id',
         'diagnosis_id',

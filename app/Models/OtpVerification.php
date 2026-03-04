@@ -11,7 +11,7 @@ class OtpVerification extends Model
     use HasFactory;
 
     protected $fillable = [
-        'whatsapp_number',
+        'email',
         'otp_code',
         'type',
         'is_verified',

@@ -9,6 +9,8 @@ use App\Models\Plant;
 use App\Models\CertaintyFactorLevel;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class KnowledgeBaseController extends Controller
 {
@@ -225,54 +227,285 @@ class KnowledgeBaseController extends Controller
     public function getPlants()
     {
         $plants = Plant::all();
+        
+        // Format image URLs
+        $appUrl = env('APP_URL', 'http://localhost:8000');
+        if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
+            $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
+        }
+        
+        $plants->transform(function($plant) use ($appUrl) {
+            $plantData = $plant->toArray();
+            
+            // Convert image path to URL
+            if ($plantData['image']) {
+                if (!str_starts_with($plantData['image'], 'http')) {
+                    $plantData['image'] = $appUrl . '/storage/' . ltrim($plantData['image'], '/');
+                }
+            }
+            
+            return $plantData;
+        });
+        
         return response()->json(['success' => true, 'data' => $plants]);
     }
 
     public function showPlant($id)
     {
         $plant = Plant::findOrFail($id);
-        return response()->json(['success' => true, 'data' => $plant]);
+        
+        // Format image URL
+        $appUrl = env('APP_URL', 'http://localhost:8000');
+        if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
+            $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
+        }
+        
+        $plantData = $plant->toArray();
+        if ($plantData['image'] && !str_starts_with($plantData['image'], 'http')) {
+            $plantData['image'] = $appUrl . '/storage/' . ltrim($plantData['image'], '/');
+        }
+        
+        return response()->json(['success' => true, 'data' => $plantData]);
     }
 
     public function storePlant(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'name' => 'required|string|max:255',
-            'scientific_name' => 'nullable|string',
-            'description' => 'nullable|string',
-            'care_guide' => 'nullable|string',
-        ]);
+        try {
+            Log::info('=== storePlant called ===');
+            Log::info('Request method:', ['method' => $request->method()]);
+            Log::info('Request content type:', ['content_type' => $request->header('Content-Type')]);
+            Log::info('Request all data:', $request->all());
+            Log::info('Has file image:', ['has_file' => $request->hasFile('image')]);
+            
+            if ($request->hasFile('image')) {
+                $file = $request->file('image');
+                Log::info('File details:', [
+                    'original_name' => $file->getClientOriginalName(),
+                    'mime_type' => $file->getMimeType(),
+                    'size' => $file->getSize(),
+                    'is_valid' => $file->isValid(),
+                    'error' => $file->getError()
+                ]);
+            } else {
+                Log::warning('No image file in request');
+            }
+            
+            $validator = Validator::make($request->all(), [
+                'name' => 'required|string|max:255',
+                'scientific_name' => 'nullable|string',
+                'description' => 'nullable|string',
+                'care_guide' => 'nullable|string',
+                'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120', // Max 5MB
+            ]);
 
-        if ($validator->fails()) {
-            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
+            if ($validator->fails()) {
+                Log::warning('Plant validation failed', ['errors' => $validator->errors()]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Validasi gagal',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
+
+            $plantData = $request->only(['name', 'scientific_name', 'description', 'care_guide']);
+            Log::info('Plant data before image:', $plantData);
+
+            // Handle image upload
+            if ($request->hasFile('image')) {
+                try {
+                    $file = $request->file('image');
+                    Log::info('Uploading plant image', [
+                        'filename' => $file->getClientOriginalName(),
+                        'size' => $file->getSize(),
+                        'mime' => $file->getMimeType()
+                    ]);
+                    
+                    $path = $file->store('plants', 'public');
+                    $plantData['image'] = $path;
+                    
+                    Log::info('Plant image uploaded successfully', ['path' => $path]);
+                } catch (\Exception $e) {
+                    Log::error('Error uploading plant image', [
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Gagal mengupload gambar: ' . $e->getMessage()
+                    ], 500);
+                }
+            } else {
+                Log::info('No image file to upload');
+            }
+
+            Log::info('Creating plant with data:', $plantData);
+            $plant = Plant::create($plantData);
+            
+            // Format image URL in response
+            $appUrl = env('APP_URL', 'http://localhost:8000');
+            if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
+                $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
+            }
+            
+            $plantData = $plant->toArray();
+            if ($plantData['image'] && !str_starts_with($plantData['image'], 'http')) {
+                $plantData['image'] = $appUrl . '/storage/' . ltrim($plantData['image'], '/');
+            }
+            
+            Log::info('Plant created successfully', [
+                'plant_id' => $plant->id,
+                'plant_data' => $plantData
+            ]);
+            
+            return response()->json(['success' => true, 'data' => $plantData], 201);
+        } catch (\Exception $e) {
+            Log::error('Error creating plant', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat menyimpan tanaman: ' . $e->getMessage()
+            ], 500);
         }
-
-        $plant = Plant::create($request->all());
-        return response()->json(['success' => true, 'data' => $plant], 201);
     }
 
     public function updatePlant(Request $request, $id)
     {
-        $plant = Plant::findOrFail($id);
+        try {
+            Log::info('=== updatePlant called ===');
+            Log::info('Request method:', ['method' => $request->method()]);
+            Log::info('Request content type:', ['content_type' => $request->header('Content-Type')]);
+            Log::info('Request all data keys:', array_keys($request->all()));
+            Log::info('Has file image:', ['has_file' => $request->hasFile('image')]);
+            
+            $plant = Plant::findOrFail($id);
+            Log::info('Current plant image:', ['current_image' => $plant->image]);
 
-        $validator = Validator::make($request->all(), [
-            'name' => 'sometimes|required|string|max:255',
-            'scientific_name' => 'nullable|string',
-            'description' => 'nullable|string',
-            'care_guide' => 'nullable|string',
-        ]);
+            $validator = Validator::make($request->all(), [
+                'name' => 'sometimes|required|string|max:255',
+                'scientific_name' => 'nullable|string',
+                'description' => 'nullable|string',
+                'care_guide' => 'nullable|string',
+                'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120', // Max 5MB
+            ]);
 
-        if ($validator->fails()) {
-            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
+            if ($validator->fails()) {
+                Log::warning('Plant update validation failed', ['errors' => $validator->errors()]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Validasi gagal',
+                    'errors' => $validator->errors()
+                ], 422);
+            }
+
+            $plantData = $request->only(['name', 'scientific_name', 'description', 'care_guide']);
+            Log::info('Plant data before image:', $plantData);
+
+            // Handle image upload
+            if ($request->hasFile('image')) {
+                try {
+                    $file = $request->file('image');
+                    Log::info('File details:', [
+                        'original_name' => $file->getClientOriginalName(),
+                        'mime_type' => $file->getMimeType(),
+                        'size' => $file->getSize(),
+                        'is_valid' => $file->isValid(),
+                        'error' => $file->getError()
+                    ]);
+                    
+                    // Delete old image
+                    if ($plant->image && Storage::disk('public')->exists($plant->image)) {
+                        Storage::disk('public')->delete($plant->image);
+                        Log::info('Old plant image deleted', ['path' => $plant->image]);
+                    }
+
+                    Log::info('Uploading plant image for update', [
+                        'plant_id' => $id,
+                        'filename' => $file->getClientOriginalName(),
+                        'size' => $file->getSize()
+                    ]);
+                    
+                    $path = $file->store('plants', 'public');
+                    $plantData['image'] = $path;
+                    
+                    Log::info('Plant image updated successfully', ['path' => $path]);
+                } catch (\Exception $e) {
+                    Log::error('Error uploading plant image for update', [
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Gagal mengupload gambar: ' . $e->getMessage()
+                    ], 500);
+                }
+            } else {
+                Log::warning('No image file in update request');
+            }
+
+            Log::info('Updating plant with data:', $plantData);
+            $updated = $plant->update($plantData);
+            Log::info('Update result:', ['updated' => $updated]);
+            
+            // Refresh plant to get latest data from database
+            $plant = $plant->fresh();
+            Log::info('Plant after fresh():', [
+                'id' => $plant->id,
+                'image' => $plant->image,
+                'image_exists' => !empty($plant->image)
+            ]);
+            
+            // Format image URL in response
+            $appUrl = env('APP_URL', 'http://localhost:8000');
+            if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
+                $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
+            }
+            
+            $plantData = $plant->toArray();
+            Log::info('Plant data before URL formatting:', [
+                'image' => $plantData['image'],
+                'all_keys' => array_keys($plantData)
+            ]);
+            
+            if (!empty($plantData['image']) && !str_starts_with($plantData['image'], 'http')) {
+                $plantData['image'] = $appUrl . '/storage/' . ltrim($plantData['image'], '/');
+                Log::info('Image URL formatted:', ['url' => $plantData['image']]);
+            } else if (empty($plantData['image'])) {
+                Log::warning('Plant image is empty after update!');
+            }
+            
+            Log::info('Plant updated successfully', [
+                'plant_id' => $id,
+                'plant_data' => $plantData,
+                'final_image' => $plantData['image'] ?? 'NULL'
+            ]);
+            
+            return response()->json(['success' => true, 'data' => $plantData]);
+        } catch (\Exception $e) {
+            Log::error('Error updating plant', [
+                'plant_id' => $id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat mengupdate tanaman: ' . $e->getMessage()
+            ], 500);
         }
-
-        $plant->update($request->all());
-        return response()->json(['success' => true, 'data' => $plant]);
     }
 
     public function destroyPlant($id)
     {
         $plant = Plant::findOrFail($id);
+        
+        // Delete image if exists
+        if ($plant->image && Storage::disk('public')->exists($plant->image)) {
+            Storage::disk('public')->delete($plant->image);
+        }
+        
         $plant->delete();
         
         return response()->json([

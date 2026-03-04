@@ -11,8 +11,8 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('expert_consultations', function (Blueprint $table) {
-            $table->string('pdf_path')->nullable()->after('whatsapp_message_id');
+        Schema::table('educational_modules', function (Blueprint $table) {
+            $table->json('content_images')->nullable()->after('content');
         });
     }
 
@@ -21,16 +21,8 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('expert_consultations', function (Blueprint $table) {
-            $table->dropColumn('pdf_path');
+        Schema::table('educational_modules', function (Blueprint $table) {
+            $table->dropColumn('content_images');
         });
     }
 };
-
-
-
-
-
-
-
-
