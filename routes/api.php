@@ -47,6 +47,7 @@ Route::prefix('public')->group(function () {
     Route::get('/plants', [DiagnosisController::class, 'getPlants']);
     Route::get('/symptoms', [DiagnosisController::class, 'getSymptoms']);
     Route::get('/cf-levels', [\App\Http\Controllers\Admin\KnowledgeBaseController::class, 'getCFLevels']);
+    Route::get('/stats/summary', [\App\Http\Controllers\PublicStatsController::class, 'summary']);
     // Endpoint untuk Python engine (tidak perlu auth)
     Route::get('/diseases/plant/{plantId}', [\App\Http\Controllers\Admin\KnowledgeBaseController::class, 'getDiseasesByPlant']);
 });

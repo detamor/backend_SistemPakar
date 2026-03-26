@@ -42,8 +42,11 @@ class DashboardStatsController extends Controller
             DB::raw('DATE_FORMAT(created_at, "%M %Y") as month'),
             DB::raw('count(*) as total')
         )
-            ->groupBy('month')
-            ->orderBy('created_at', 'asc')
+            // Untuk kompatibilitas dengan sql_mode=only_full_group_by,
+            // orderby tidak boleh memakai created_at langsung karena tidak ada di GROUP BY.
+            // Pakai expression yang sama dengan SELECT alias month.
+            ->groupBy(DB::raw('DATE_FORMAT(created_at, "%M %Y")'))
+            ->orderBy('month', 'asc')
             ->limit(6)
             ->get();
 

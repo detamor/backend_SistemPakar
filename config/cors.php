@@ -29,6 +29,8 @@ return [
 
     'max_age' => 0,
 
-    'supports_credentials' => true,
+    // Bearer token, bukan cookie session => tidak perlu credentials.
+    // Hindari kombinasi allowed_origins=['*'] dengan credentials di CORS.
+    'supports_credentials' => false,
 
 ];

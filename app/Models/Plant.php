@@ -32,6 +32,14 @@ class Plant extends Model
     }
 
     /**
+     * Gejala yang ditandai untuk tanaman ini (nama ruang kerja admin).
+     */
+    public function symptoms(): HasMany
+    {
+        return $this->hasMany(Symptom::class);
+    }
+
+    /**
      * Relasi dengan diagnoses
      */
     public function diagnoses(): HasMany

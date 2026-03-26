@@ -20,21 +20,15 @@ class DiagnosisController extends Controller
     {
         try {
             $plants = Plant::where('is_active', true)->get();
-            
-            // Format image URLs
-            $appUrl = env('APP_URL', 'http://localhost:8000');
-            // Ensure port is included for localhost
-            if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
-                $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
-            }
-            
-            $plants->transform(function($plant) use ($appUrl) {
+
+            // Format image URLs (pakai relative /storage supaya tidak bergantung APP_URL/IP)
+            $plants->transform(function($plant) {
                 $plantData = $plant->toArray();
                 
                 // Convert image path to URL
                 if ($plantData['image']) {
                     if (!str_starts_with($plantData['image'], 'http')) {
-                        $plantData['image'] = $appUrl . '/storage/' . ltrim($plantData['image'], '/');
+                        $plantData['image'] = '/storage/' . ltrim($plantData['image'], '/');
                     }
                 }
                 
@@ -73,9 +67,11 @@ class DiagnosisController extends Controller
             $query = Symptom::where('is_active', true);
             
             if ($plantId) {
-                // Filter gejala berdasarkan tanaman (jika ada relasi)
-                $query->whereHas('diseases', function($q) use ($plantId) {
-                    $q->where('plant_id', $plantId);
+                $query->where(function ($q) use ($plantId) {
+                    $q->where('plant_id', $plantId)
+                        ->orWhereHas('diseases', function ($q2) use ($plantId) {
+                            $q2->where('plant_id', $plantId);
+                        });
                 });
             }
             

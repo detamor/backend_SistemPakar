@@ -11,9 +11,40 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\Rule;
 
 class KnowledgeBaseController extends Controller
 {
+    /**
+     * Tambahkan baris disease_symptoms yang hilang: semua gejala dengan plant_id
+     * sama seperti penyakit, dengan CF awal 0 (idempotent).
+     *
+     * Mencegah: API/client mengirim daftar gejala parsial → detach menghapus pivot
+     *           padahal gejala tanaman lain tetap harus ada.
+     */
+    private function ensureDiseaseLinkedToPlantSymptoms(Disease $disease): void
+    {
+        if ($disease->plant_id === null) {
+            return;
+        }
+
+        $linkedIds = $disease->symptoms()->pluck('symptoms.id');
+        $missingIds = Symptom::query()
+            ->where('plant_id', $disease->plant_id)
+            ->whereNotIn('id', $linkedIds)
+            ->pluck('id');
+
+        if ($missingIds->isEmpty()) {
+            return;
+        }
+
+        $attach = [];
+        foreach ($missingIds as $symptomId) {
+            $attach[$symptomId] = ['certainty_factor' => 0.00];
+        }
+        $disease->symptoms()->attach($attach);
+    }
+
     /**
      * Mendapatkan semua penyakit dengan gejala (untuk admin panel)
      */
@@ -106,8 +137,8 @@ class KnowledgeBaseController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'code' => 'required|string|unique:diseases,code',
-            'description' => 'required|string',
-            'plant_id' => 'nullable|exists:plants,id',
+            'description' => 'nullable|string',
+            'plant_id' => 'required|exists:plants,id',
             'cause' => 'nullable|string',
             'solution' => 'nullable|string',
             'prevention' => 'nullable|string',
@@ -124,9 +155,13 @@ class KnowledgeBaseController extends Controller
             ], 422);
         }
 
-        $disease = Disease::create($request->only([
+        $diseaseData = $request->only([
             'name', 'code', 'description', 'plant_id', 'cause', 'solution', 'prevention'
-        ]));
+        ]);
+        // Kolom description di DB masih NOT NULL, jadi kosongkan jadi string agar tidak error.
+        $diseaseData['description'] = $diseaseData['description'] ?? '';
+
+        $disease = Disease::create($diseaseData);
 
         // Attach symptoms dengan CF jika ada
         if ($request->has('symptoms') && is_array($request->symptoms) && count($request->symptoms) > 0) {
@@ -136,6 +171,8 @@ class KnowledgeBaseController extends Controller
                 ]);
             }
         }
+
+        $this->ensureDiseaseLinkedToPlantSymptoms($disease);
 
         $disease->load('symptoms');
 
@@ -165,8 +202,8 @@ class KnowledgeBaseController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'sometimes|required|string|max:255',
             'code' => 'sometimes|required|string|unique:diseases,code,' . $id,
-            'description' => 'sometimes|required|string',
-            'plant_id' => 'nullable|exists:plants,id',
+            'description' => 'nullable|string',
+            'plant_id' => 'required|exists:plants,id',
             'cause' => 'nullable|string',
             'solution' => 'nullable|string',
             'prevention' => 'nullable|string',
@@ -183,9 +220,23 @@ class KnowledgeBaseController extends Controller
             ], 422);
         }
 
-        $disease->update($request->only([
+        $diseaseData = $request->only([
             'name', 'code', 'description', 'plant_id', 'cause', 'solution', 'prevention'
-        ]));
+        ]);
+        if (!array_key_exists('description', $diseaseData) || $diseaseData['description'] === null) {
+            $diseaseData['description'] = '';
+        }
+
+        $incomingPlantId = isset($diseaseData['plant_id']) ? (int) $diseaseData['plant_id'] : (int) $disease->plant_id;
+        if ($incomingPlantId !== (int) $disease->plant_id && $disease->symptoms()->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Tanaman pada penyakit tidak dapat diubah karena sudah ada aturan gejala (CF). Buat penyakit baru untuk tanaman lain, atau hapus dulu hubungan gejala pada penyakit ini.',
+            ], 422);
+        }
+
+        $disease->update($diseaseData);
+        $disease->refresh();
 
         // Update symptoms jika ada
         if ($request->has('symptoms') && is_array($request->symptoms) && count($request->symptoms) > 0) {
@@ -196,6 +247,9 @@ class KnowledgeBaseController extends Controller
                 ]);
             }
         }
+
+        // Pulihkan semua gejala bertanda tanaman ini (mencegah payload gejala parsial menghapus pivot permanen)
+        $this->ensureDiseaseLinkedToPlantSymptoms($disease);
 
         $disease->load('symptoms');
 
@@ -227,20 +281,14 @@ class KnowledgeBaseController extends Controller
     public function getPlants()
     {
         $plants = Plant::all();
-        
-        // Format image URLs
-        $appUrl = env('APP_URL', 'http://localhost:8000');
-        if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
-            $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
-        }
-        
-        $plants->transform(function($plant) use ($appUrl) {
+        $plants->transform(function($plant) {
             $plantData = $plant->toArray();
             
             // Convert image path to URL
-            if ($plantData['image']) {
+            if (!empty($plantData['image'] ?? null)) {
                 if (!str_starts_with($plantData['image'], 'http')) {
-                    $plantData['image'] = $appUrl . '/storage/' . ltrim($plantData['image'], '/');
+                    // Return relative URL: /storage/{file}
+                    $plantData['image'] = '/storage/' . ltrim($plantData['image'], '/');
                 }
             }
             
@@ -253,16 +301,11 @@ class KnowledgeBaseController extends Controller
     public function showPlant($id)
     {
         $plant = Plant::findOrFail($id);
-        
-        // Format image URL
-        $appUrl = env('APP_URL', 'http://localhost:8000');
-        if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
-            $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
-        }
-        
+
         $plantData = $plant->toArray();
-        if ($plantData['image'] && !str_starts_with($plantData['image'], 'http')) {
-            $plantData['image'] = $appUrl . '/storage/' . ltrim($plantData['image'], '/');
+        if (!empty($plantData['image'] ?? null) && !str_starts_with($plantData['image'], 'http')) {
+            // Return relative URL: /storage/{file}
+            $plantData['image'] = '/storage/' . ltrim($plantData['image'], '/');
         }
         
         return response()->json(['success' => true, 'data' => $plantData]);
@@ -341,15 +384,10 @@ class KnowledgeBaseController extends Controller
             Log::info('Creating plant with data:', $plantData);
             $plant = Plant::create($plantData);
             
-            // Format image URL in response
-            $appUrl = env('APP_URL', 'http://localhost:8000');
-            if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
-                $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
-            }
-            
             $plantData = $plant->toArray();
-            if ($plantData['image'] && !str_starts_with($plantData['image'], 'http')) {
-                $plantData['image'] = $appUrl . '/storage/' . ltrim($plantData['image'], '/');
+            if (!empty($plantData['image'] ?? null) && !str_starts_with($plantData['image'], 'http')) {
+                // Return relative URL: /storage/{file}
+                $plantData['image'] = '/storage/' . ltrim($plantData['image'], '/');
             }
             
             Log::info('Plant created successfully', [
@@ -457,20 +495,15 @@ class KnowledgeBaseController extends Controller
                 'image_exists' => !empty($plant->image)
             ]);
             
-            // Format image URL in response
-            $appUrl = env('APP_URL', 'http://localhost:8000');
-            if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
-                $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
-            }
-            
             $plantData = $plant->toArray();
             Log::info('Plant data before URL formatting:', [
-                'image' => $plantData['image'],
+                'image' => $plantData['image'] ?? null,
                 'all_keys' => array_keys($plantData)
             ]);
             
             if (!empty($plantData['image']) && !str_starts_with($plantData['image'], 'http')) {
-                $plantData['image'] = $appUrl . '/storage/' . ltrim($plantData['image'], '/');
+                // Return relative URL: /storage/{file}
+                $plantData['image'] = '/storage/' . ltrim($plantData['image'], '/');
                 Log::info('Image URL formatted:', ['url' => $plantData['image']]);
             } else if (empty($plantData['image'])) {
                 Log::warning('Plant image is empty after update!');
@@ -505,6 +538,15 @@ class KnowledgeBaseController extends Controller
         if ($plant->image && Storage::disk('public')->exists($plant->image)) {
             Storage::disk('public')->delete($plant->image);
         }
+
+        /*
+         * FK diseases.plant_id memakai onDelete('set null') → tanpa ini, penyakit jadi orphan
+         * (plant_id null) sementara disease_symptoms masih ada — basis pengetahuan tidak konsisten.
+         */
+        Disease::where('plant_id', $plant->id)->get()->each(function (Disease $disease) {
+            $disease->symptoms()->detach();
+            $disease->delete();
+        });
         
         $plant->delete();
         
@@ -515,59 +557,107 @@ class KnowledgeBaseController extends Controller
     }
 
     /**
-     * Mendapatkan data matriks Certainty Factor (semua gejala x semua penyakit)
+     * Satu blok matriks CF untuk satu tanaman (gejala terkait x penyakit tanaman).
      */
-    public function getCFMatrix(Request $request)
+    private function buildCfMatrixBlock(int $plantId): array
     {
-        $plantId = $request->query('plant_id');
-        
-        // Get all symptoms
-        $symptoms = Symptom::orderBy('code')->get();
-        
-        // Get all diseases
-        $query = Disease::with(['symptoms']);
-        if ($plantId) {
-            $query->where('plant_id', $plantId);
-        }
-        $diseases = $query->orderBy('code')->get();
-        
-        // Build matrix data
+        $plant = Plant::find($plantId);
+
+        $diseases = Disease::with(['symptoms'])
+            ->where('plant_id', $plantId)
+            ->orderBy('code')
+            ->get();
+
+        $symptoms = Symptom::query()
+            ->orderBy('code')
+            ->where(function ($q) use ($plantId) {
+                $q->where('plant_id', $plantId)
+                    ->orWhereHas('diseases', function ($q2) use ($plantId) {
+                        $q2->where('plant_id', $plantId);
+                    });
+            })
+            ->get();
+
         $matrix = [];
-        
+
         foreach ($symptoms as $symptom) {
             $row = [
                 'symptom_id' => $symptom->id,
                 'symptom_code' => $symptom->code,
                 'symptom_description' => $symptom->description,
-                'diseases' => []
+                'diseases' => [],
             ];
-            
+
             foreach ($diseases as $disease) {
-                // Find CF for this symptom-disease combination
                 $cf = 0;
                 $relatedSymptom = $disease->symptoms->firstWhere('id', $symptom->id);
                 if ($relatedSymptom) {
                     $cf = (float) $relatedSymptom->pivot->certainty_factor;
                 }
-                
+
                 $row['diseases'][] = [
                     'disease_id' => $disease->id,
                     'disease_code' => $disease->code,
                     'disease_name' => $disease->name,
-                    'certainty_factor' => $cf
+                    'certainty_factor' => $cf,
                 ];
             }
-            
+
             $matrix[] = $row;
         }
-        
+
+        return [
+            'plant_id' => $plantId,
+            'plant_name' => $plant ? $plant->name : '',
+            'diseases' => $diseases->map(fn ($d) => [
+                'id' => $d->id,
+                'code' => $d->code,
+                'name' => $d->name,
+            ])->values()->all(),
+            'matrix' => $matrix,
+        ];
+    }
+
+    /**
+     * Mendapatkan data matriks Certainty Factor.
+     * Tanaman tertentu: satu blok. Semua tanaman: satu blok per tanaman (tabel terpisah di UI).
+     */
+    public function getCFMatrix(Request $request)
+    {
+        $plantId = $request->query('plant_id');
+
+        if ($plantId) {
+            $block = $this->buildCfMatrixBlock((int) $plantId);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'blocks' => [$block],
+                    'symptoms' => collect($block['matrix'])->map(fn ($r) => [
+                        'id' => $r['symptom_id'],
+                        'code' => $r['symptom_code'],
+                        'description' => $r['symptom_description'],
+                    ]),
+                    'diseases' => $block['diseases'],
+                    'matrix' => $block['matrix'],
+                ],
+            ]);
+        }
+
+        $plants = Plant::orderBy('name')->get();
+        $blocks = [];
+        foreach ($plants as $plant) {
+            $blocks[] = $this->buildCfMatrixBlock((int) $plant->id);
+        }
+
         return response()->json([
             'success' => true,
             'data' => [
-                'symptoms' => $symptoms->map(fn($s) => ['id' => $s->id, 'code' => $s->code, 'description' => $s->description]),
-                'diseases' => $diseases->map(fn($d) => ['id' => $d->id, 'code' => $d->code, 'name' => $d->name]),
-                'matrix' => $matrix
-            ]
+                'blocks' => $blocks,
+                'symptoms' => [],
+                'diseases' => [],
+                'matrix' => [],
+            ],
         ]);
     }
 
@@ -591,6 +681,13 @@ class KnowledgeBaseController extends Controller
 
         $symptom = Symptom::findOrFail($request->symptom_id);
         $disease = Disease::findOrFail($request->disease_id);
+
+        if ($symptom->plant_id !== null && (int) $symptom->plant_id !== (int) $disease->plant_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gejala dan penyakit harus untuk tanaman yang sama.',
+            ], 422);
+        }
 
         // Check if relation exists
         $exists = $disease->symptoms()->where('symptoms.id', $symptom->id)->exists();
@@ -633,7 +730,11 @@ class KnowledgeBaseController extends Controller
         $validator = Validator::make($request->all(), [
             'code' => 'required|string|unique:symptoms,code',
             'description' => 'required|string',
-            'category' => 'required|string|in:DAUN,BATANG,AKAR,BUNGA,UMUM',
+            // Kategori opsional: teks bebas (bukan enum terbatas)
+            'category' => 'nullable|string|max:255',
+            // Konteks tanaman agar gejala baru bisa langsung dihubungkan
+            // ke penyakit yang dimiliki tanaman tersebut.
+            'plant_id' => 'nullable|exists:plants,id',
         ]);
 
         if ($validator->fails()) {
@@ -644,7 +745,26 @@ class KnowledgeBaseController extends Controller
             ], 422);
         }
 
-        $symptom = Symptom::create($request->all());
+        $data = $validator->validated();
+        $plantId = $data['plant_id'] ?? null;
+        unset($data['plant_id']);
+
+        $cat = $data['category'] ?? null;
+        $data['category'] = ($cat !== null && trim((string) $cat) !== '') ? trim((string) $cat) : null;
+
+        $symptom = Symptom::create(array_merge($data, ['plant_id' => $plantId]));
+
+        // Jika plant_id dikirim, kaitkan gejala ke semua penyakit milik plant tsb.
+        // CF awal diset ke 0 agar tetap aman (tanpa pengaruh sampai diubah via tabel CF).
+        if ($plantId) {
+            $diseases = Disease::where('plant_id', $plantId)->get();
+            foreach ($diseases as $disease) {
+                $disease->symptoms()->syncWithoutDetaching([
+                    $symptom->id => ['certainty_factor' => 0.00],
+                ]);
+            }
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Gejala berhasil ditambahkan',
@@ -659,7 +779,8 @@ class KnowledgeBaseController extends Controller
         $validator = Validator::make($request->all(), [
             'code' => 'sometimes|required|string|unique:symptoms,code,' . $id,
             'description' => 'sometimes|required|string',
-            'category' => 'sometimes|required|string|in:DAUN,BATANG,AKAR,BUNGA,UMUM',
+            'category' => 'sometimes|nullable|string|max:255',
+            'plant_id' => 'sometimes|nullable|exists:plants,id',
         ]);
 
         if ($validator->fails()) {
@@ -670,11 +791,42 @@ class KnowledgeBaseController extends Controller
             ], 422);
         }
 
-        $symptom->update($request->all());
+        $data = $validator->validated();
+        if (array_key_exists('category', $data)) {
+            $cat = $data['category'];
+            $data['category'] = ($cat !== null && trim((string) $cat) !== '') ? trim((string) $cat) : null;
+        }
+        if (array_key_exists('plant_id', $data) && $data['plant_id'] === '') {
+            $data['plant_id'] = null;
+        }
+
+        $oldPlantId = $symptom->plant_id;
+        $symptom->update($data);
+        $symptom->refresh();
+
+        if (array_key_exists('plant_id', $data) && $oldPlantId != $symptom->plant_id) {
+            if ($symptom->plant_id === null) {
+                $symptom->diseases()->detach();
+            } else {
+                $wrongPlantDiseaseIds = $symptom->diseases()
+                    ->where('diseases.plant_id', '!=', $symptom->plant_id)
+                    ->pluck('diseases.id');
+                if ($wrongPlantDiseaseIds->isNotEmpty()) {
+                    $symptom->diseases()->detach($wrongPlantDiseaseIds);
+                }
+                $diseases = Disease::where('plant_id', $symptom->plant_id)->get();
+                foreach ($diseases as $disease) {
+                    $disease->symptoms()->syncWithoutDetaching([
+                        $symptom->id => ['certainty_factor' => 0.00],
+                    ]);
+                }
+            }
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Gejala berhasil diupdate',
-            'data' => $symptom
+            'data' => $symptom->fresh(['plant']),
         ]);
     }
 
@@ -729,8 +881,15 @@ class KnowledgeBaseController extends Controller
         $validator = Validator::make($request->all(), [
             'label' => 'required|string|unique:certainty_factor_levels,label',
             'value' => 'required|numeric|min:0|max:1|unique:certainty_factor_levels,value',
-            'order' => 'required|integer|min:1',
+            'order' => [
+                'required',
+                'integer',
+                'min:1',
+                Rule::unique('certainty_factor_levels', 'order'),
+            ],
             'is_active' => 'boolean',
+        ], [
+            'order.unique' => 'Urutan sudah dipakai oleh level lain. Setiap bobot harus punya urutan berbeda.',
         ]);
 
         if ($validator->fails()) {
@@ -756,8 +915,16 @@ class KnowledgeBaseController extends Controller
         $validator = Validator::make($request->all(), [
             'label' => 'sometimes|required|string|unique:certainty_factor_levels,label,' . $id,
             'value' => 'sometimes|required|numeric|min:0|max:1|unique:certainty_factor_levels,value,' . $id,
-            'order' => 'sometimes|required|integer|min:1',
+            'order' => [
+                'sometimes',
+                'required',
+                'integer',
+                'min:1',
+                Rule::unique('certainty_factor_levels', 'order')->ignore($id),
+            ],
             'is_active' => 'boolean',
+        ], [
+            'order.unique' => 'Urutan sudah dipakai oleh level lain. Setiap bobot harus punya urutan berbeda.',
         ]);
 
         if ($validator->fails()) {
