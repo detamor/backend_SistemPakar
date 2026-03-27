@@ -459,6 +459,8 @@ class AuthController extends Controller
                     'name' => $user->name,
                     'email' => $user->email,
                     'whatsapp_number' => $user->whatsapp_number,
+                    'phone' => $user->phone,
+                    'bio' => $user->bio,
                     'role' => $user->role,
                     'photo' => $user->photo,
                     'is_verified' => $user->is_verified,

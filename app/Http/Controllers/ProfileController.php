@@ -19,6 +19,8 @@ class ProfileController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'sometimes|required|string|max:255',
             'email' => 'sometimes|required|string|email|max:255|unique:users,email,' . $user->id,
+            'phone' => 'nullable|string|max:20',
+            'bio' => 'nullable|string|max:1000',
             'photo' => 'sometimes|image|mimes:jpeg,png,jpg,gif|max:2048',
         ]);
 
@@ -37,6 +39,16 @@ class ProfileController extends Controller
         // Update email
         if ($request->has('email')) {
             $user->email = $request->email;
+        }
+
+        // Update phone
+        if ($request->has('phone')) {
+            $user->phone = $request->phone;
+        }
+
+        // Update bio
+        if ($request->has('bio')) {
+            $user->bio = $request->bio;
         }
 
         // Update photo
