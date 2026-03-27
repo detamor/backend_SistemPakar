@@ -57,6 +57,8 @@ Route::prefix('diagnosis')->middleware('auth:sanctum')->group(function () {
     Route::post('/', [DiagnosisController::class, 'diagnose']);
     Route::get('/history', [DiagnosisController::class, 'getHistory']);
     Route::get('/{id}', [DiagnosisController::class, 'getDetail']);
+    Route::put('/{id}/notes', [DiagnosisController::class, 'updateNotes']);
+    Route::delete('/{id}/notes', [DiagnosisController::class, 'deleteNotes']);
     Route::get('/{id}/pdf', [DiagnosisController::class, 'downloadPdf']);
 });
 

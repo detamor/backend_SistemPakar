@@ -593,6 +593,117 @@ class DiagnosisController extends Controller
     }
 
     /**
+     * Update / create catatan evaluasi user pada diagnosis.
+     */
+    public function updateNotes(Request $request, $id)
+    {
+        $validator = Validator::make($request->all(), [
+            'user_notes' => 'required|string|max:1000',
+        ]);
+
+        if ($validator->fails()) {
+            $this->addCorsHeaders($response = response()->json([
+                'success' => false,
+                'errors' => $validator->errors()
+            ], 422));
+
+            return $response;
+        }
+
+        try {
+            $diagnosis = Diagnosis::where('user_id', auth()->id())->findOrFail($id);
+
+            $normalizedNotes = trim((string) $request->user_notes);
+
+            if ($normalizedNotes === '') {
+                $this->addCorsHeaders($response = response()->json([
+                    'success' => false,
+                    'message' => 'Catatan tidak boleh kosong.'
+                ], 422));
+
+                return $response;
+            }
+
+            $diagnosis->update([
+                'user_notes' => $normalizedNotes
+            ]);
+
+            $this->addCorsHeaders($response = response()->json([
+                'success' => true,
+                'message' => 'Catatan evaluasi berhasil disimpan.',
+                'data' => [
+                    'id' => $diagnosis->id,
+                    'user_notes' => $diagnosis->user_notes,
+                    'updated_at' => $diagnosis->updated_at,
+                ]
+            ]));
+
+            return $response;
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            $this->addCorsHeaders($response = response()->json([
+                'success' => false,
+                'message' => 'Diagnosis tidak ditemukan'
+            ], 404));
+
+            return $response;
+        } catch (\Exception $e) {
+            Log::error('Error updating diagnosis notes', [
+                'diagnosis_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+
+            $this->addCorsHeaders($response = response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat menyimpan catatan.',
+                'error' => $e->getMessage()
+            ], 500));
+
+            return $response;
+        }
+    }
+
+    /**
+     * Hapus catatan evaluasi user pada diagnosis.
+     */
+    public function deleteNotes($id)
+    {
+        try {
+            $diagnosis = Diagnosis::where('user_id', auth()->id())->findOrFail($id);
+
+            $diagnosis->update([
+                'user_notes' => null
+            ]);
+
+            $this->addCorsHeaders($response = response()->json([
+                'success' => true,
+                'message' => 'Catatan evaluasi berhasil dihapus.'
+            ]));
+
+            return $response;
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            $this->addCorsHeaders($response = response()->json([
+                'success' => false,
+                'message' => 'Diagnosis tidak ditemukan'
+            ], 404));
+
+            return $response;
+        } catch (\Exception $e) {
+            Log::error('Error deleting diagnosis notes', [
+                'diagnosis_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+
+            $this->addCorsHeaders($response = response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat menghapus catatan.',
+                'error' => $e->getMessage()
+            ], 500));
+
+            return $response;
+        }
+    }
+
+    /**
      * Download PDF laporan diagnosis
      */
     public function downloadPdf($id)

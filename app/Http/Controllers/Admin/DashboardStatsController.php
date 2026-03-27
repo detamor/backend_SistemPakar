@@ -71,7 +71,7 @@ class DashboardStatsController extends Controller
         $recentFeedbacks = Feedback::query()
             ->with([
                 'user:id,name',
-                'diagnosis:id,disease_id,plant_id',
+                'diagnosis:id,disease_id,plant_id,user_notes',
                 'diagnosis.disease:id,name',
                 'diagnosis.plant:id,name',
             ])
@@ -85,10 +85,39 @@ class DashboardStatsController extends Controller
                     'id' => $feedback->id,
                     'accuracy' => $feedback->accuracy,
                     'comment' => trim((string) $feedback->comment),
+                    'user_notes' => $feedback->diagnosis?->user_notes
+                        ? trim((string) $feedback->diagnosis->user_notes)
+                        : null,
                     'created_at' => optional($feedback->created_at)->toISOString(),
                     'user_name' => $feedback->user?->name ?? 'User',
                     'plant_name' => $feedback->diagnosis?->plant?->name,
                     'disease_name' => $feedback->diagnosis?->disease?->name,
+                ];
+            })
+            ->values();
+
+        // Catatan evaluasi diagnosis terbaru untuk admin (terpisah dari feedback comment)
+        $recentEvaluationNotes = Diagnosis::query()
+            ->with([
+                'user:id,name',
+                'plant:id,name',
+                'disease:id,name',
+            ])
+            ->whereNotNull('user_notes')
+            ->whereRaw('TRIM(user_notes) <> ""')
+            ->latest()
+            ->limit(12)
+            ->get()
+            ->map(function ($diagnosis) {
+                return [
+                    'id' => $diagnosis->id,
+                    'diagnosis_id' => $diagnosis->id,
+                    'user_name' => $diagnosis->user?->name ?? 'User',
+                    'plant_name' => $diagnosis->plant?->name,
+                    'disease_name' => $diagnosis->disease?->name,
+                    'user_notes' => trim((string) $diagnosis->user_notes),
+                    'created_at' => optional($diagnosis->created_at)->toISOString(),
+                    'updated_at' => optional($diagnosis->updated_at)->toISOString(),
                 ];
             })
             ->values();
@@ -100,6 +129,7 @@ class DashboardStatsController extends Controller
                 'monthlyTrend' => $monthlyTrend,
                 'feedbackStats' => $feedbackStats,
                 'recentFeedbacks' => $recentFeedbacks,
+                'recentEvaluationNotes' => $recentEvaluationNotes,
             ]
         ]);
     }
