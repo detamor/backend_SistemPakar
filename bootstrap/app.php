@@ -15,11 +15,6 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'admin' => \App\Http\Middleware\AdminMiddleware::class,
         ]);
-        
-        // Enable CORS untuk API routes - gunakan custom middleware
-        $middleware->api(prepend: [
-            \App\Http\Middleware\CorsMiddleware::class,
-        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         // Pastikan semua error response memiliki CORS headers
@@ -34,12 +29,6 @@ return Application::configure(basePath: dirname(__DIR__))
                         'trace' => $e->getTraceAsString()
                     ] : 'Internal server error'
                 ], 500);
-
-                // Tambahkan CORS headers
-                $response->headers->set('Access-Control-Allow-Origin', '*');
-                $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-                $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
-                $response->headers->set('Access-Control-Allow-Credentials', 'true');
 
                 return $response;
             }

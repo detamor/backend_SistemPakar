@@ -122,11 +122,17 @@ class DiagnosisController extends Controller
         }
 
         try {
+            $normalizedNotes = null;
+            if ($request->filled('user_notes')) {
+                $trimmedNotes = trim((string) $request->user_notes);
+                $normalizedNotes = $trimmedNotes !== '' ? $trimmedNotes : null;
+            }
+
             // Buat diagnosis record
             $diagnosis = Diagnosis::create([
                 'user_id' => auth()->id(),
                 'plant_id' => $request->plant_id,
-                'user_notes' => $request->user_notes,
+                'user_notes' => $normalizedNotes,
                 'status' => 'pending',
             ]);
 
@@ -379,6 +385,7 @@ class DiagnosisController extends Controller
 
                         $this->addCorsHeaders($response = response()->json([
                             'success' => true,
+                            'diagnosis_id' => $diagnosis->id,
                             'data' => $responseData
                         ], 200));
                         
@@ -640,7 +647,7 @@ class DiagnosisController extends Controller
         $response->headers->set('Access-Control-Allow-Origin', '*');
         $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
         $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
-        $response->headers->set('Access-Control-Allow-Credentials', 'true');
+        $response->headers->set('Access-Control-Allow-Credentials', 'false');
         
         return $response;
     }
