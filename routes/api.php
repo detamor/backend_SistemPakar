@@ -70,11 +70,11 @@ Route::prefix('feedback')->middleware('auth:sanctum')->group(function () {
 
 // Educational Modules Routes
 Route::prefix('education')->middleware('auth:sanctum')->group(function () {
+    Route::get('/bookmarks/my', [EducationalModuleController::class, 'getBookmarks']);
     Route::get('/', [EducationalModuleController::class, 'index']);
     Route::get('/{id}', [EducationalModuleController::class, 'show']);
     Route::post('/{id}/bookmark', [EducationalModuleController::class, 'bookmark']);
     Route::delete('/{id}/bookmark', [EducationalModuleController::class, 'unbookmark']);
-    Route::get('/bookmarks/my', [EducationalModuleController::class, 'getBookmarks']);
 });
 
 // Expert Consultation Routes

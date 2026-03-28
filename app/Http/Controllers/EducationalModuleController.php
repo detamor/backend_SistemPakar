@@ -6,9 +6,65 @@ use App\Models\EducationalModule;
 use App\Models\Bookmark;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Storage;
 
 class EducationalModuleController extends Controller
 {
+    protected function buildPublicFileUrl(Request $request, ?string $path): ?string
+    {
+        if (!$path) {
+            return null;
+        }
+
+        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+            $parsedPath = parse_url($path, PHP_URL_PATH);
+            if ($parsedPath && str_contains($parsedPath, '/storage/')) {
+                return rtrim($request->getSchemeAndHttpHost(), '/') . $parsedPath;
+            }
+            return $path;
+        }
+
+        $cleanPath = ltrim($path, '/');
+        if (str_starts_with($cleanPath, 'storage/')) {
+            $cleanPath = substr($cleanPath, strlen('storage/'));
+        }
+
+        return rtrim($request->getSchemeAndHttpHost(), '/') . Storage::url($cleanPath);
+    }
+
+    protected function formatModuleForResponse(Request $request, EducationalModule $module): array
+    {
+        $moduleData = $module->toArray();
+
+        if (!empty($moduleData['image'])) {
+            $moduleData['image'] = $this->buildPublicFileUrl($request, $moduleData['image']);
+        }
+
+        if (!empty($moduleData['content_images']) && is_array($moduleData['content_images'])) {
+            $moduleData['content_images'] = array_map(function ($path) use ($request) {
+                return $this->buildPublicFileUrl($request, $path);
+            }, $moduleData['content_images']);
+        }
+
+        return $moduleData;
+    }
+
+    /**
+     * Escape %, _, \ untuk digunakan di pola LIKE.
+     */
+    protected function escapeLikePattern(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
+    }
+
+    /**
+     * Pola LIKE case-insensitive: nilai user di-lower, kolom dibandingkan dengan LOWER(...).
+     */
+    protected function caseInsensitiveLikePattern(string $search): string
+    {
+        return '%'.$this->escapeLikePattern(mb_strtolower($search, 'UTF-8')).'%';
+    }
+
     /**
      * Helper method untuk menambahkan CORS headers ke response
      */
@@ -29,13 +85,37 @@ class EducationalModuleController extends Controller
     {
         try {
             $category = $request->query('category');
+            $search = trim((string) $request->query('search', ''));
             $query = EducationalModule::where('is_active', true);
             
             if ($category) {
                 $query->where('category', $category);
             }
+
+            if ($search !== '') {
+                $normalizedSearch = ltrim($search, '#');
+                $pat = $this->caseInsensitiveLikePattern($search);
+                $patNorm = $this->caseInsensitiveLikePattern($normalizedSearch);
+                $patHashNorm = $this->caseInsensitiveLikePattern('#'.$normalizedSearch);
+
+                $query->where(function ($q) use ($pat, $patNorm, $patHashNorm, $search, $normalizedSearch) {
+                    $q->whereRaw('LOWER(title) LIKE ?', [$pat])
+                        ->orWhereRaw('LOWER(COALESCE(content, "")) LIKE ?', [$pat])
+                        ->orWhereRaw('LOWER(COALESCE(category, "")) LIKE ?', [$pat])
+                        ->orWhereRaw('LOWER(CAST(vital_tags_json AS CHAR)) LIKE ?', [$pat]);
+
+                    if ($normalizedSearch !== $search) {
+                        $q->orWhereRaw('LOWER(CAST(vital_tags_json AS CHAR)) LIKE ?', [$patNorm]);
+                    } else {
+                        $q->orWhereRaw('LOWER(CAST(vital_tags_json AS CHAR)) LIKE ?', [$patHashNorm]);
+                    }
+                });
+            }
             
             $modules = $query->orderBy('created_at', 'desc')->paginate(10);
+            $modules->getCollection()->transform(function ($module) use ($request) {
+                return $this->formatModuleForResponse($request, $module);
+            });
             
             $this->addCorsHeaders($response = response()->json([
                 'success' => true,
@@ -61,13 +141,10 @@ class EducationalModuleController extends Controller
     /**
      * Mendapatkan detail modul edukasi
      */
-    public function show($id)
+    public function show(Request $request, $id)
     {
         try {
             $module = EducationalModule::findOrFail($id);
-            
-            // Increment view count
-            $module->increment('view_count');
             
             // Cek apakah user sudah bookmark
             $isBookmarked = false;
@@ -79,7 +156,7 @@ class EducationalModuleController extends Controller
             
             $this->addCorsHeaders($response = response()->json([
                 'success' => true,
-                'data' => $module,
+                'data' => $this->formatModuleForResponse($request, $module),
                 'is_bookmarked' => $isBookmarked
             ]));
             
@@ -180,7 +257,7 @@ class EducationalModuleController extends Controller
     /**
      * Mendapatkan bookmark user
      */
-    public function getBookmarks()
+    public function getBookmarks(Request $request)
     {
         try {
             $user = auth()->user();
@@ -188,7 +265,15 @@ class EducationalModuleController extends Controller
             $bookmarks = Bookmark::where('user_id', $user->id)
                 ->with('educationalModule')
                 ->orderBy('created_at', 'desc')
-                ->get();
+                ->get()
+                ->map(function ($bookmark) use ($request) {
+                    $bookmarkData = $bookmark->toArray();
+                    if ($bookmark->educationalModule) {
+                        $bookmarkData['educational_module'] = $this->formatModuleForResponse($request, $bookmark->educationalModule);
+                    }
+                    return $bookmarkData;
+                })
+                ->values();
             
             $this->addCorsHeaders($response = response()->json([
                 'success' => true,

@@ -12,7 +12,6 @@ class EducationalModule extends Model
 
     protected $fillable = [
         'title',
-        'description',
         'content',
         'category',
         'image',
@@ -24,6 +23,7 @@ class EducationalModule extends Model
         'light_info',
         'humidity_info',
         'difficulty',
+        'vital_tags_json',
         'maintenance_steps_json',
     ];
 
@@ -32,6 +32,7 @@ class EducationalModule extends Model
         'is_active' => 'boolean',
         'is_maintenance_guide' => 'boolean',
         'content_images' => 'array',
+        'vital_tags_json' => 'array',
         'maintenance_steps_json' => 'array',
     ];
 

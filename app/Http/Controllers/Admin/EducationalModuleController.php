@@ -11,6 +11,114 @@ use Illuminate\Support\Facades\Log;
 
 class EducationalModuleController extends Controller
 {
+    protected function normalizeTagTokens(array $tokens): array
+    {
+        $normalized = [];
+        $seen = [];
+
+        foreach ($tokens as $token) {
+            if (!is_string($token)) {
+                continue;
+            }
+            $parts = preg_split('/[,\s]+/', trim($token)) ?: [];
+            foreach ($parts as $part) {
+                $part = trim($part);
+                if ($part === '') {
+                    continue;
+                }
+                $tag = str_starts_with($part, '#') ? $part : ('#' . $part);
+                $key = mb_strtolower($tag);
+                if (!isset($seen[$key])) {
+                    $seen[$key] = true;
+                    $normalized[] = $tag;
+                }
+            }
+        }
+
+        return $normalized;
+    }
+
+    protected function normalizeMaintenanceTagsInput(mixed $input): array
+    {
+        if (is_array($input)) {
+            return $this->normalizeTagTokens($input);
+        }
+        if (is_string($input)) {
+            return $this->normalizeTagTokens([$input]);
+        }
+        return [];
+    }
+
+    /**
+     * Bangun URL publik file storage berdasarkan host request aktif.
+     */
+    protected function buildPublicFileUrl(Request $request, ?string $path): ?string
+    {
+        if (!$path) {
+            return null;
+        }
+
+        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+            $parsedPath = parse_url($path, PHP_URL_PATH);
+            if ($parsedPath && str_contains($parsedPath, '/storage/')) {
+                return rtrim($request->getSchemeAndHttpHost(), '/') . $parsedPath;
+            }
+            return $path;
+        }
+
+        $normalizedPath = $this->normalizeStoredPath($path);
+        $storagePath = Storage::url(ltrim((string) $normalizedPath, '/')); // /storage/xxx
+        return rtrim($request->getSchemeAndHttpHost(), '/') . $storagePath;
+    }
+
+    /**
+     * Normalisasi path file agar yang tersimpan konsisten relatif ke storage/public.
+     */
+    protected function normalizeStoredPath(?string $path): ?string
+    {
+        if (!$path) {
+            return null;
+        }
+
+        $clean = trim($path);
+        if ($clean === '') {
+            return null;
+        }
+
+        // Jika URL absolut local storage, ubah jadi path relatif.
+        if (str_starts_with($clean, 'http://') || str_starts_with($clean, 'https://')) {
+            $parsedPath = parse_url($clean, PHP_URL_PATH);
+            if ($parsedPath && str_contains($parsedPath, '/storage/')) {
+                $clean = substr($parsedPath, strpos($parsedPath, '/storage/') + strlen('/storage/'));
+            } else {
+                // URL eksternal dibiarkan apa adanya.
+                return $clean;
+            }
+        }
+
+        $clean = ltrim($clean, '/');
+        if (str_starts_with($clean, 'storage/')) {
+            $clean = substr($clean, strlen('storage/'));
+        }
+
+        return $clean;
+    }
+
+    protected function normalizeStoredPaths(array $paths): array
+    {
+        $normalized = [];
+        foreach ($paths as $path) {
+            if (!is_string($path)) {
+                continue;
+            }
+            $value = $this->normalizeStoredPath($path);
+            if ($value && !in_array($value, $normalized, true)) {
+                $normalized[] = $value;
+            }
+        }
+        return $normalized;
+    }
+
     /**
      * Helper method untuk menambahkan CORS headers ke response
      */
@@ -42,7 +150,6 @@ class EducationalModuleController extends Controller
                 $search = $request->search;
                 $query->where(function($q) use ($search) {
                     $q->where('title', 'like', "%{$search}%")
-                      ->orWhere('description', 'like', "%{$search}%")
                       ->orWhere('content', 'like', "%{$search}%");
                 });
             }
@@ -50,28 +157,18 @@ class EducationalModuleController extends Controller
             $modules = $query->orderBy('created_at', 'desc')->paginate(15);
 
             // Format image URLs for each module
-            $appUrl = env('APP_URL', 'http://localhost:8000');
-            // Ensure port is included for localhost
-            if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
-                $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
-            }
-            $modules->getCollection()->transform(function($module) use ($appUrl) {
+            $modules->getCollection()->transform(function($module) use ($request) {
                 $moduleData = $module->toArray();
                 
                 // Convert thumbnail image path to URL
                 if ($moduleData['image']) {
-                    if (!str_starts_with($moduleData['image'], 'http')) {
-                        $moduleData['image'] = $appUrl . '/storage/' . ltrim($moduleData['image'], '/');
-                    }
+                    $moduleData['image'] = $this->buildPublicFileUrl($request, $moduleData['image']);
                 }
                 
                 // Convert content_images paths to URLs
                 if (!empty($moduleData['content_images']) && is_array($moduleData['content_images'])) {
-                    $moduleData['content_images'] = array_map(function($path) use ($appUrl) {
-                        if ($path && !str_starts_with($path, 'http')) {
-                            return $appUrl . '/storage/' . ltrim($path, '/');
-                        }
-                        return $path;
+                    $moduleData['content_images'] = array_map(function($path) use ($request) {
+                        return $this->buildPublicFileUrl($request, $path);
                     }, $moduleData['content_images']);
                 }
                 
@@ -102,33 +199,23 @@ class EducationalModuleController extends Controller
     /**
      * Get module detail
      */
-    public function show($id)
+    public function show(Request $request, $id)
     {
         try {
             $module = EducationalModule::findOrFail($id);
             
             // Format image URLs
             $moduleData = $module->toArray();
-            $appUrl = env('APP_URL', 'http://localhost:8000');
-            // Ensure port is included for localhost
-            if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
-                $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
-            }
             
             // Convert thumbnail image path to URL
             if ($moduleData['image']) {
-                if (!str_starts_with($moduleData['image'], 'http')) {
-                    $moduleData['image'] = $appUrl . '/storage/' . ltrim($moduleData['image'], '/');
-                }
+                $moduleData['image'] = $this->buildPublicFileUrl($request, $moduleData['image']);
             }
             
             // Convert content_images paths to URLs
             if (!empty($moduleData['content_images']) && is_array($moduleData['content_images'])) {
-                $moduleData['content_images'] = array_map(function($path) use ($appUrl) {
-                    if ($path && !str_starts_with($path, 'http')) {
-                        return $appUrl . '/storage/' . ltrim($path, '/');
-                    }
-                    return $path;
+                $moduleData['content_images'] = array_map(function($path) use ($request) {
+                    return $this->buildPublicFileUrl($request, $path);
                 }, $moduleData['content_images']);
             }
 
@@ -181,12 +268,7 @@ class EducationalModuleController extends Controller
 
         try {
             $path = $request->file('image')->store('educational_modules/content', 'public');
-            $appUrl = env('APP_URL', 'http://localhost:8000');
-            // Ensure port is included for localhost
-            if (str_contains($appUrl, 'localhost') && !str_contains($appUrl, 'localhost:')) {
-                $appUrl = str_replace('localhost', 'localhost:8000', $appUrl);
-            }
-            $url = $appUrl . '/storage/' . ltrim($path, '/');
+            $url = $this->buildPublicFileUrl($request, $path);
 
             $this->addCorsHeaders($response = response()->json([
                 'success' => true,
@@ -219,17 +301,15 @@ class EducationalModuleController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
-            'description' => 'required|string|max:500',
             'content' => 'required|string',
             'category' => 'nullable|string|max:255',
             'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
             'content_images' => 'nullable|array',
             'content_images.*' => 'string',
             'is_maintenance_guide' => 'nullable|boolean',
-            'watering_info' => 'nullable|string|max:255',
-            'light_info' => 'nullable|string|max:255',
-            'humidity_info' => 'nullable|string|max:255',
-            'difficulty' => 'nullable|in:Mudah,Sedang,Sulit',
+            'vital_tags_json' => 'nullable|array',
+            'vital_tags_json.*' => 'string|max:50',
+            'maintenance_tags' => 'nullable|string|max:500',
             'maintenance_steps_json' => 'nullable|array',
         ]);
 
@@ -244,10 +324,19 @@ class EducationalModuleController extends Controller
 
         try {
             $moduleData = $request->only([
-                'title', 'description', 'content', 'category', 
-                'is_maintenance_guide', 'watering_info', 'light_info', 
-                'humidity_info', 'difficulty', 'maintenance_steps_json'
+                'title', 'content', 'category',
+                'is_maintenance_guide', 'maintenance_steps_json'
             ]);
+
+            $normalizedTags = $this->normalizeMaintenanceTagsInput(
+                $request->input('vital_tags_json', $request->input('maintenance_tags'))
+            );
+            $moduleData['vital_tags_json'] = !empty($normalizedTags) ? $normalizedTags : null;
+            // Hard stop: legacy fields are no longer used.
+            $moduleData['watering_info'] = null;
+            $moduleData['light_info'] = null;
+            $moduleData['humidity_info'] = null;
+            $moduleData['difficulty'] = null;
 
             // Handle thumbnail image upload
             if ($request->hasFile('image')) {
@@ -257,7 +346,7 @@ class EducationalModuleController extends Controller
 
             // Handle content images (array of paths/URLs)
             if ($request->has('content_images')) {
-                $moduleData['content_images'] = $request->content_images;
+                $moduleData['content_images'] = $this->normalizeStoredPaths($request->content_images ?? []);
             }
 
             $module = EducationalModule::create($moduleData);
@@ -295,7 +384,6 @@ class EducationalModuleController extends Controller
 
             $validator = Validator::make($request->all(), [
                 'title' => 'sometimes|required|string|max:255',
-                'description' => 'sometimes|required|string|max:500',
                 'content' => 'sometimes|required|string',
                 'category' => 'nullable|string|max:255',
                 'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
@@ -303,10 +391,9 @@ class EducationalModuleController extends Controller
                 'content_images.*' => 'string',
                 'is_active' => 'sometimes|boolean',
                 'is_maintenance_guide' => 'nullable|boolean',
-                'watering_info' => 'nullable|string|max:255',
-                'light_info' => 'nullable|string|max:255',
-                'humidity_info' => 'nullable|string|max:255',
-                'difficulty' => 'nullable|in:Mudah,Sedang,Sulit',
+                'vital_tags_json' => 'nullable|array',
+                'vital_tags_json.*' => 'string|max:50',
+                'maintenance_tags' => 'nullable|string|max:500',
                 'maintenance_steps_json' => 'nullable|array',
             ]);
 
@@ -320,16 +407,31 @@ class EducationalModuleController extends Controller
             }
 
             $updateData = $request->only([
-                'title', 'description', 'content', 'category', 'is_active',
-                'is_maintenance_guide', 'watering_info', 'light_info', 
-                'humidity_info', 'difficulty', 'maintenance_steps_json'
+                'title', 'content', 'category', 'is_active',
+                'is_maintenance_guide', 'maintenance_steps_json'
             ]);
+
+            if ($request->has('vital_tags_json') || $request->has('maintenance_tags')) {
+                $normalizedTags = $this->normalizeMaintenanceTagsInput(
+                    $request->input('vital_tags_json', $request->input('maintenance_tags'))
+                );
+                $updateData['vital_tags_json'] = !empty($normalizedTags) ? $normalizedTags : null;
+            }
+
+            // Hard stop: always clear legacy fields on update.
+            $updateData['watering_info'] = null;
+            $updateData['light_info'] = null;
+            $updateData['humidity_info'] = null;
+            $updateData['difficulty'] = null;
 
             // Handle thumbnail image upload
             if ($request->hasFile('image')) {
                 // Delete old image
-                if ($module->image && Storage::disk('public')->exists($module->image)) {
-                    Storage::disk('public')->delete($module->image);
+                $oldImage = $this->normalizeStoredPath($module->image);
+                $isExternalOldImage = $oldImage
+                    && (str_starts_with($oldImage, 'http://') || str_starts_with($oldImage, 'https://'));
+                if ($oldImage && !$isExternalOldImage && Storage::disk('public')->exists($oldImage)) {
+                    Storage::disk('public')->delete($oldImage);
                 }
 
                 $path = $request->file('image')->store('educational_modules', 'public');
@@ -339,11 +441,12 @@ class EducationalModuleController extends Controller
             // Handle content images
             if ($request->has('content_images')) {
                 // Delete old content images that are not in the new list
-                $oldImages = $module->content_images ?? [];
-                $newImages = $request->content_images ?? [];
+                $oldImages = $this->normalizeStoredPaths($module->content_images ?? []);
+                $newImages = $this->normalizeStoredPaths($request->content_images ?? []);
                 
                 foreach ($oldImages as $oldImage) {
-                    if (!in_array($oldImage, $newImages) && Storage::disk('public')->exists($oldImage)) {
+                    $isExternal = str_starts_with($oldImage, 'http://') || str_starts_with($oldImage, 'https://');
+                    if (!$isExternal && !in_array($oldImage, $newImages, true) && Storage::disk('public')->exists($oldImage)) {
                         Storage::disk('public')->delete($oldImage);
                     }
                 }
@@ -392,14 +495,18 @@ class EducationalModuleController extends Controller
             $module = EducationalModule::findOrFail($id);
 
             // Delete thumbnail image if exists
-            if ($module->image && Storage::disk('public')->exists($module->image)) {
-                Storage::disk('public')->delete($module->image);
+            $normalizedThumbnail = $this->normalizeStoredPath($module->image);
+            $isExternalThumbnail = $normalizedThumbnail
+                && (str_starts_with($normalizedThumbnail, 'http://') || str_starts_with($normalizedThumbnail, 'https://'));
+            if ($normalizedThumbnail && !$isExternalThumbnail && Storage::disk('public')->exists($normalizedThumbnail)) {
+                Storage::disk('public')->delete($normalizedThumbnail);
             }
 
             // Delete content images if exists
             if ($module->content_images && is_array($module->content_images)) {
-                foreach ($module->content_images as $contentImage) {
-                    if (Storage::disk('public')->exists($contentImage)) {
+                foreach ($this->normalizeStoredPaths($module->content_images) as $contentImage) {
+                    $isExternal = str_starts_with($contentImage, 'http://') || str_starts_with($contentImage, 'https://');
+                    if (!$isExternal && Storage::disk('public')->exists($contentImage)) {
                         Storage::disk('public')->delete($contentImage);
                     }
                 }
