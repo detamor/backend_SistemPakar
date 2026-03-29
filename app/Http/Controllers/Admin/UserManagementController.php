@@ -18,17 +18,17 @@ class UserManagementController extends Controller
         $query = User::query();
 
         // Filter by role
-        if ($request->has('role')) {
-            $query->where('role', $request->role);
+        $role = $request->query('role');
+        if (is_string($role) && $role !== '') {
+            $query->where('role', $role);
         }
 
         // Search
-        if ($request->has('search')) {
-            $search = $request->search;
+        $search = $request->query('search');
+        if (is_string($search) && $search !== '') {
             $query->where(function($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('email', 'like', "%{$search}%")
-                  ->orWhere('whatsapp_number', 'like', "%{$search}%");
+                  ->orWhere('email', 'like', "%{$search}%");
             });
         }
 
@@ -43,7 +43,7 @@ class UserManagementController extends Controller
     /**
      * Get user detail
      */
-    public function show($id)
+    public function show(int $id)
     {
         $user = User::with(['diagnoses', 'bookmarks', 'consultations'])
             ->findOrFail($id);
@@ -63,7 +63,6 @@ class UserManagementController extends Controller
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
             'password' => 'required|string|min:8',
-            'whatsapp_number' => 'nullable|string|regex:/^[0-9]{10,15}$/',
             'role' => 'required|in:user,admin',
         ]);
 
@@ -75,11 +74,10 @@ class UserManagementController extends Controller
         }
 
         $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => Hash::make($request->password),
-            'whatsapp_number' => $request->whatsapp_number,
-            'role' => $request->role,
+            'name' => $request->input('name'),
+            'email' => $request->input('email'),
+            'password' => Hash::make((string) $request->input('password')),
+            'role' => $request->input('role'),
             'is_verified' => true,
         ]);
 
@@ -93,7 +91,7 @@ class UserManagementController extends Controller
     /**
      * Update user
      */
-    public function update(Request $request, $id)
+    public function update(Request $request, int $id)
     {
         $user = User::findOrFail($id);
 
@@ -101,7 +99,6 @@ class UserManagementController extends Controller
             'name' => 'sometimes|required|string|max:255',
             'email' => 'sometimes|required|string|email|max:255|unique:users,email,' . $id,
             'password' => 'sometimes|string|min:8',
-            'whatsapp_number' => 'nullable|string|regex:/^[0-9]{10,15}$/',
             'role' => 'sometimes|required|in:user,admin',
             'is_verified' => 'sometimes|boolean',
         ]);
@@ -113,10 +110,10 @@ class UserManagementController extends Controller
             ], 422);
         }
 
-        $updateData = $request->only(['name', 'email', 'whatsapp_number', 'role', 'is_verified']);
+        $updateData = $request->only(['name', 'email', 'role', 'is_verified']);
 
-        if ($request->has('password')) {
-            $updateData['password'] = Hash::make($request->password);
+        if ($request->filled('password')) {
+            $updateData['password'] = Hash::make((string) $request->input('password'));
         }
 
         $user->update($updateData);
@@ -131,12 +128,20 @@ class UserManagementController extends Controller
     /**
      * Delete user
      */
-    public function destroy($id)
+    public function destroy(Request $request, int $id)
     {
+        $authUser = $request->user();
+        if (! $authUser instanceof User) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User tidak terautentikasi'
+            ], 401);
+        }
+
         $user = User::findOrFail($id);
 
         // Prevent deleting yourself
-        if ($user->id === auth()->id()) {
+        if ((int) $user->id === (int) $authUser->id) {
             return response()->json([
                 'success' => false,
                 'message' => 'Tidak dapat menghapus akun sendiri'
@@ -151,5 +156,3 @@ class UserManagementController extends Controller
         ]);
     }
 }
-
-

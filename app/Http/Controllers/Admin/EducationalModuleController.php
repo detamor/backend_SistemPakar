@@ -138,11 +138,11 @@ class EducationalModuleController extends Controller
     public function index(Request $request)
     {
         try {
-            $query = EducationalModule::query();
+            $query = EducationalModule::with('plant')->query();
 
-            // Filter by category
-            if ($request->has('category')) {
-                $query->where('category', $request->category);
+            $plantId = $request->query('plant_id');
+            if (is_numeric($plantId)) {
+                $query->where('plant_id', (int) $plantId);
             }
 
             // Search
@@ -150,7 +150,10 @@ class EducationalModuleController extends Controller
                 $search = $request->search;
                 $query->where(function($q) use ($search) {
                     $q->where('title', 'like', "%{$search}%")
-                      ->orWhere('content', 'like', "%{$search}%");
+                      ->orWhere('content', 'like', "%{$search}%")
+                      ->orWhereHas('plant', function ($pq) use ($search) {
+                          $pq->where('name', 'like', "%{$search}%");
+                      });
                 });
             }
 
@@ -302,7 +305,7 @@ class EducationalModuleController extends Controller
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
             'content' => 'required|string',
-            'category' => 'nullable|string|max:255',
+            'plant_id' => 'nullable|integer|exists:plants,id',
             'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
             'content_images' => 'nullable|array',
             'content_images.*' => 'string',
@@ -324,7 +327,7 @@ class EducationalModuleController extends Controller
 
         try {
             $moduleData = $request->only([
-                'title', 'content', 'category',
+                'title', 'content', 'plant_id',
                 'is_maintenance_guide', 'maintenance_steps_json'
             ]);
 
@@ -385,7 +388,7 @@ class EducationalModuleController extends Controller
             $validator = Validator::make($request->all(), [
                 'title' => 'sometimes|required|string|max:255',
                 'content' => 'sometimes|required|string',
-                'category' => 'nullable|string|max:255',
+                'plant_id' => 'nullable|integer|exists:plants,id',
                 'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
                 'content_images' => 'nullable|array',
                 'content_images.*' => 'string',
@@ -407,7 +410,7 @@ class EducationalModuleController extends Controller
             }
 
             $updateData = $request->only([
-                'title', 'content', 'category', 'is_active',
+                'title', 'content', 'plant_id', 'is_active',
                 'is_maintenance_guide', 'maintenance_steps_json'
             ]);
 

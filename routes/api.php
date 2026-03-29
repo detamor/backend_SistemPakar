@@ -26,9 +26,9 @@ use App\Http\Controllers\AuthController;
 // Auth Routes (Public)
 Route::prefix('auth')->group(function () {
     Route::post('/register', [AuthController::class, 'register']);
-    Route::post('/verify-otp', [AuthController::class, 'verifyOtp']);
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/password/reset', [AuthController::class, 'requestPasswordReset']);
+    Route::post('/password/verify-otp', [AuthController::class, 'verifyPasswordResetOtp']);
     Route::post('/password/verify', [AuthController::class, 'resetPassword']);
     
     // Protected routes
@@ -53,8 +53,8 @@ Route::prefix('public')->group(function () {
 });
 
 // Diagnosis Routes
+Route::post('/diagnosis', [DiagnosisController::class, 'diagnose']);
 Route::prefix('diagnosis')->middleware('auth:sanctum')->group(function () {
-    Route::post('/', [DiagnosisController::class, 'diagnose']);
     Route::get('/history', [DiagnosisController::class, 'getHistory']);
     Route::get('/{id}', [DiagnosisController::class, 'getDetail']);
     Route::put('/{id}/notes', [DiagnosisController::class, 'updateNotes']);
@@ -69,10 +69,12 @@ Route::prefix('feedback')->middleware('auth:sanctum')->group(function () {
 });
 
 // Educational Modules Routes
-Route::prefix('education')->middleware('auth:sanctum')->group(function () {
-    Route::get('/bookmarks/my', [EducationalModuleController::class, 'getBookmarks']);
+Route::prefix('education')->group(function () {
     Route::get('/', [EducationalModuleController::class, 'index']);
     Route::get('/{id}', [EducationalModuleController::class, 'show']);
+});
+Route::prefix('education')->middleware('auth:sanctum')->group(function () {
+    Route::get('/bookmarks/my', [EducationalModuleController::class, 'getBookmarks']);
     Route::post('/{id}/bookmark', [EducationalModuleController::class, 'bookmark']);
     Route::delete('/{id}/bookmark', [EducationalModuleController::class, 'unbookmark']);
 });
@@ -89,6 +91,8 @@ Route::prefix('consultation')->middleware('auth:sanctum')->group(function () {
 Route::prefix('profile')->middleware('auth:sanctum')->group(function () {
     Route::get('/', [\App\Http\Controllers\ProfileController::class, 'show']);
     Route::post('/update', [\App\Http\Controllers\ProfileController::class, 'update']);
+    Route::post('/email/request-otp', [\App\Http\Controllers\ProfileController::class, 'requestEmailChangeOtp']);
+    Route::post('/email/verify-otp', [\App\Http\Controllers\ProfileController::class, 'verifyEmailChangeOtp']);
     Route::post('/change-password', [\App\Http\Controllers\ProfileController::class, 'changePassword']);
     Route::delete('/photo', [\App\Http\Controllers\ProfileController::class, 'removePhoto']);
 });
@@ -155,4 +159,3 @@ Route::prefix('whatsapp')->middleware('auth:sanctum')->group(function () {
     Route::get('/status/{messageId}', [WhatsAppController::class, 'getStatus']);
     Route::post('/webhook', [WhatsAppController::class, 'webhook'])->withoutMiddleware('auth:sanctum');
 });
-

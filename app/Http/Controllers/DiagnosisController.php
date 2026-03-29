@@ -6,6 +6,7 @@ use App\Models\Diagnosis;
 use App\Models\Plant;
 use App\Models\Symptom;
 use App\Models\Disease;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -209,8 +210,133 @@ class DiagnosisController extends Controller
             }
 
             // Buat diagnosis record
+            $user = $request->user();
+            if (! $user instanceof User) {
+                $pythonApiUrl = env('PYTHON_API_URL', 'http://localhost:8001');
+
+                $diseases = Disease::where('plant_id', $request->plant_id)
+                    ->where('is_active', true)
+                    ->with(['symptoms' => function($query) {
+                        $query->select('symptoms.id', 'symptoms.code', 'symptoms.description');
+                    }])
+                    ->get();
+
+                $diseasesData = $diseases->map(function($disease) {
+                    $symptomsData = [];
+                    foreach ($disease->symptoms as $symptom) {
+                        $symptomsData[] = [
+                            'symptom_id' => $symptom->id,
+                            'certainty_factor' => (float) ($symptom->pivot->certainty_factor ?? 0.0)
+                        ];
+                    }
+
+                    return [
+                        'id' => $disease->id,
+                        'name' => $disease->name,
+                        'description' => $disease->description ?? '',
+                        'cause' => $disease->cause ?? '',
+                        'solution' => $disease->solution ?? '',
+                        'prevention' => $disease->prevention ?? '',
+                        'symptoms' => $symptomsData
+                    ];
+                })->toArray();
+
+                $response = Http::withOptions([
+                    'timeout' => 120,
+                    'connect_timeout' => 10,
+                    'verify' => false,
+                ])
+                ->retry(2, 1000)
+                ->post("{$pythonApiUrl}/api/diagnose", [
+                    'diagnosis_id' => 0,
+                    'plant_id' => $request->plant_id,
+                    'symptoms' => $request->symptoms,
+                    'diseases_data' => $diseasesData,
+                ]);
+
+                if (! $response->successful()) {
+                    $this->addCorsHeaders($r = response()->json([
+                        'success' => false,
+                        'message' => 'Engine diagnosis tidak tersedia. Pastikan Python engine running di port 8001.',
+                    ], 503));
+                    return $r;
+                }
+
+                $result = $response->json();
+                if (!is_array($result) || !($result['success'] ?? false) || !isset($result['data'])) {
+                    $this->addCorsHeaders($r = response()->json([
+                        'success' => false,
+                        'message' => 'Python engine mengembalikan response tidak valid.',
+                    ], 500));
+                    return $r;
+                }
+
+                $diseaseId = $result['data']['disease_id'] ?? null;
+                $certaintyValue = (float) ($result['data']['certainty_value'] ?? 0);
+                $recommendation = $result['data']['recommendation'] ?? null;
+                $allPossibilities = $result['data']['all_possibilities'] ?? [];
+                $matchedSymptomsCount = 0;
+                if (is_array($allPossibilities) && !empty($allPossibilities) && isset($allPossibilities[0])) {
+                    $matchedSymptomsCount = (int) ($allPossibilities[0]['matched_count'] ?? 0);
+                }
+
+                $plant = Plant::find($request->plant_id);
+                $disease = $diseaseId ? Disease::find($diseaseId) : null;
+
+                $symptomIds = collect($request->symptoms)->pluck('symptom_id')->filter()->unique()->values()->all();
+                $symptoms = Symptom::whereIn('id', $symptomIds)->get()->keyBy('id');
+                $symptomsArray = [];
+                foreach ($request->symptoms as $symptomData) {
+                    $sid = (int) ($symptomData['symptom_id'] ?? 0);
+                    if (!$sid || !$symptoms->has($sid)) {
+                        continue;
+                    }
+                    $s = $symptoms->get($sid);
+                    $symptomsArray[] = [
+                        'id' => $s->id,
+                        'code' => $s->code,
+                        'description' => $s->description,
+                        'user_cf' => (float) ($symptomData['user_cf'] ?? 0),
+                    ];
+                }
+
+                $responseData = [
+                    'diagnosis' => [
+                        'id' => null,
+                        'user_id' => null,
+                        'plant_id' => (int) $request->plant_id,
+                        'disease_id' => $disease ? $disease->id : null,
+                        'certainty_value' => $certaintyValue,
+                        'recommendation' => $recommendation,
+                        'all_possibilities' => $allPossibilities,
+                        'matched_symptoms_count' => $matchedSymptomsCount,
+                        'user_notes' => $normalizedNotes,
+                        'status' => 'completed',
+                    ],
+                    'disease' => $disease ? $disease->toArray() : null,
+                    'plant' => $plant ? $plant->toArray() : null,
+                    'symptoms' => $symptomsArray,
+                    'certainty_value' => $certaintyValue,
+                    'recommendation' => $recommendation,
+                    'all_possibilities' => $allPossibilities,
+                    'matched_symptoms_count' => $matchedSymptomsCount,
+                    'tied_diseases' => $this->buildTiedTopDiseasesFromPossibilities(
+                        is_array($allPossibilities) ? $allPossibilities : [],
+                        (int) $request->plant_id
+                    ),
+                ];
+
+                $this->addCorsHeaders($r = response()->json([
+                    'success' => true,
+                    'diagnosis_id' => null,
+                    'data' => $responseData,
+                    'is_guest' => true,
+                ], 200));
+                return $r;
+            }
+
             $diagnosis = Diagnosis::create([
-                'user_id' => auth()->id(),
+                'user_id' => $user->id,
                 'plant_id' => $request->plant_id,
                 'user_notes' => $normalizedNotes,
                 'status' => 'pending',
@@ -857,6 +983,5 @@ class DiagnosisController extends Controller
         return $response;
     }
 }
-
 
 

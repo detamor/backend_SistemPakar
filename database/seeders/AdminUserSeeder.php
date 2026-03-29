@@ -19,7 +19,6 @@ class AdminUserSeeder extends Seeder
             [
                 'name' => 'Administrator',
                 'password' => Hash::make('admin123'), // Password default: admin123
-                'whatsapp_number' => '6281234567890', // Nomor default, bisa diubah
                 'role' => 'admin',
                 'is_verified' => true,
             ]

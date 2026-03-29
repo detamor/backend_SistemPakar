@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\ExpertConsultation;
 use App\Models\Diagnosis;
+use App\Models\Disease;
 use App\Services\WhatsAppService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -54,10 +55,16 @@ class ExpertConsultationController extends Controller
         // Pengiriman pesan hanya dilakukan melalui method sendWhatsAppWithPdf
         // yang dipanggil oleh frontend setelah proses create.
 
+        $whatsappUrl = null;
+        if ($expertWhatsapp) {
+            $whatsappUrl = $this->buildWhatsAppDeepLink($expertWhatsapp, $consultation->message);
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Konsultasi berhasil dibuat. Pakar akan menghubungi Anda via WhatsApp.',
-            'data' => $consultation->load(['diagnosis'])
+            'data' => $consultation->load(['diagnosis']),
+            'whatsapp_url' => $whatsappUrl,
         ], 201);
     }
 
@@ -196,9 +203,8 @@ class ExpertConsultationController extends Controller
         $consultation = ExpertConsultation::where('user_id', $user->id)
             ->findOrFail($request->consultation_id);
 
-        // Get diagnosis if provided
-        $diagnosis = $consultation->diagnosis_id 
-            ? Diagnosis::with(['plant', 'disease'])->find($consultation->diagnosis_id)
+        $diagnosis = $consultation->diagnosis_id
+            ? Diagnosis::with(['plant', 'disease', 'symptoms'])->find($consultation->diagnosis_id)
             : null;
 
         // Format message (gunakan message dari consultation atau request)
@@ -209,6 +215,7 @@ class ExpertConsultationController extends Controller
             $pdfSent = false;
             $pdfError = null;
             $pdfPath = null;
+            $pdfUrl = null;
             
             // Prioritas 1: Cek PDF manual yang sudah diupload (dari consultation.pdf_path)
             if ($consultation->pdf_path && Storage::disk('public')->exists($consultation->pdf_path)) {
@@ -244,10 +251,15 @@ class ExpertConsultationController extends Controller
                             'consultation_id' => $consultation->id
                         ]);
                         
-                        // Generate PDF langsung dari diagnosis
+                        $tiedTopDiseases = $this->buildTiedTopDiseasesFromPossibilities(
+                            is_array($diagnosis->all_possibilities_json ?? null) ? $diagnosis->all_possibilities_json : [],
+                            (int) $diagnosis->plant_id
+                        );
+
                         $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('diagnosis.pdf', [
                             'diagnosis' => $diagnosis,
-                            'user' => $user
+                            'user' => $user,
+                            'tiedTopDiseases' => $tiedTopDiseases,
                         ]);
                         
                         // Simpan PDF ke storage/public agar bisa diakses via URL
@@ -289,31 +301,9 @@ class ExpertConsultationController extends Controller
                     ]);
                 }
             }
-            
-            // Kirim PDF sebagai document attachment menggunakan file lokal (CURLFile)
-            // Jika ada PDF, kirim langsung dengan file attachment (termasuk message di caption)
-            // Jika tidak ada PDF, kirim message biasa
-            // Cek apakah ada diagnosis untuk menambahkan info ke pesan
-            if ($diagnosis) {
-                // Pastikan folder pdfs ada (untuk mendukung pengunduhan manual di frontend)
-                if (!Storage::disk('public')->exists('pdfs')) {
-                    Storage::disk('public')->makeDirectory('pdfs');
-                }
-                
-                // Jika PDF belum pernah di-generate, kita generate sekarang (agar siap diunduh user)
-                if (!$diagnosis->pdf_path || !Storage::disk('public')->exists($diagnosis->pdf_path)) {
-                    try {
-                        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('diagnosis.pdf', [
-                            'diagnosis' => $diagnosis,
-                            'user' => $user
-                        ]);
-                        $pdfPath = 'pdfs/diagnosis-' . $diagnosis->id . '.pdf';
-                        Storage::disk('public')->put($pdfPath, $pdf->output());
-                        $diagnosis->update(['pdf_path' => $pdfPath]);
-                    } catch (\Exception $pdfError) {
-                        Log::warning('Gagal pre-generate PDF: ' . $pdfError->getMessage());
-                    }
-                }
+
+            if ($pdfPath) {
+                $pdfUrl = $this->buildPublicFileUrl($request, Storage::url($pdfPath));
             }
 
             // Kirim pesan teks standar ke Pakar
@@ -322,7 +312,31 @@ class ExpertConsultationController extends Controller
                 $message
             );
             
-            $pdfSent = false;
+            if ($pdfPath) {
+                if ($pdfUrl) {
+                    $documentResult = $this->whatsappService->sendDocumentByUrl(
+                        $expertWhatsapp,
+                        $pdfUrl,
+                        basename($pdfPath),
+                        '📎 Laporan diagnosis terlampir'
+                    );
+                    $pdfSent = (bool) ($documentResult['success'] ?? false);
+                    if (! $pdfSent) {
+                        $pdfError = $pdfError ?: ($documentResult['error'] ?? 'Gagal mengirim PDF');
+                    }
+                } else {
+                    $documentResult = $this->whatsappService->sendDocumentByFile(
+                        $expertWhatsapp,
+                        $pdfPath,
+                        basename($pdfPath),
+                        '📎 Laporan diagnosis terlampir'
+                    );
+                    $pdfSent = (bool) ($documentResult['success'] ?? false);
+                    if (! $pdfSent) {
+                        $pdfError = $pdfError ?: ($documentResult['error'] ?? 'Gagal mengirim PDF');
+                    }
+                }
+            }
             
             // Update consultation dengan PDF path dan WhatsApp message ID
             $updateData = [
@@ -340,21 +354,23 @@ class ExpertConsultationController extends Controller
             
             $consultation->update($updateData);
 
-            $responseMessage = 'Konsultasi berhasil dikirim ke pakar via WhatsApp';
-            if ($pdfSent) {
-                $responseMessage .= ' beserta PDF laporan diagnosis sebagai attachment';
-            } elseif ($pdfPath && $pdfError) {
-                $responseMessage .= '. Catatan: PDF gagal dikirim sebagai attachment (' . $pdfError . ').';
-            } elseif ($diagnosis && !$pdfPath) {
-                $responseMessage .= '. Catatan: PDF gagal di-generate. Silakan coba lagi.';
-            }
+            $whatsappUrl = $this->buildWhatsAppDeepLink(
+                $expertWhatsapp,
+                $pdfUrl ? ($message . "\n\nLaporan PDF: " . $pdfUrl) : $message
+            );
 
             return response()->json([
                 'success' => true,
-                'message' => $responseMessage,
+                'message' => 'Siap untuk menghubungi pakar via WhatsApp.',
                 'data' => $consultation->load(['diagnosis']),
-                'pdf_sent' => $pdfSent
-            ], 201);
+                'whatsapp_url' => $whatsappUrl,
+                'pdf_url' => $pdfUrl,
+                'send_status' => [
+                    'message_sent' => (bool) ($whatsappResult['success'] ?? false),
+                    'pdf_sent' => (bool) $pdfSent,
+                    'pdf_error' => $pdfError,
+                ],
+            ], 200);
 
         } catch (\Exception $e) {
             Log::error('Error sending WhatsApp consultation', [
@@ -377,7 +393,7 @@ class ExpertConsultationController extends Controller
     {
         $message = "🔔 *Konsultasi Baru dari System Pakar*\n\n";
         $message .= "👤 *Pengguna:* {$user->name}\n";
-        $message .= "📱 *WhatsApp:* {$user->whatsapp_number}\n\n";
+        $message .= "📧 *Email:* {$user->email}\n\n";
         
         if ($diagnosis) {
             $message .= "🌱 *Tanaman:* {$diagnosis->plant->name}\n";
@@ -399,5 +415,109 @@ class ExpertConsultationController extends Controller
 
         return $message;
     }
-}
 
+    private function buildPublicFileUrl(Request $request, ?string $path): ?string
+    {
+        if (!$path) {
+            return null;
+        }
+
+        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+            $parsedPath = parse_url($path, PHP_URL_PATH);
+            if ($parsedPath && str_contains($parsedPath, '/storage/')) {
+                return rtrim($request->getSchemeAndHttpHost(), '/') . $parsedPath;
+            }
+            return $path;
+        }
+
+        $cleanPath = ltrim($path, '/');
+        return rtrim($request->getSchemeAndHttpHost(), '/') . '/' . $cleanPath;
+    }
+
+    private function buildWhatsAppDeepLink(string $phoneNumber, string $message): string
+    {
+        $digitsOnly = preg_replace('/[^0-9]/', '', $phoneNumber);
+        if (str_starts_with($digitsOnly, '0')) {
+            $digitsOnly = '62' . substr($digitsOnly, 1);
+        } elseif (!str_starts_with($digitsOnly, '62')) {
+            $digitsOnly = '62' . $digitsOnly;
+        }
+        return 'https://wa.me/' . $digitsOnly . '?text=' . rawurlencode($message);
+    }
+
+    private function buildTiedTopDiseasesFromPossibilities(?array $possibilities, int $plantId): array
+    {
+        if (empty($possibilities)) {
+            return [];
+        }
+
+        $maxCf = -1.0;
+        foreach ($possibilities as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $cf = (float) ($row['certainty_value'] ?? 0);
+            if ($cf > $maxCf) {
+                $maxCf = $cf;
+            }
+        }
+
+        if ($maxCf < 0) {
+            return [];
+        }
+
+        $eps = 1e-4;
+        $orderedIds = [];
+        $rowById = [];
+        foreach ($possibilities as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $cf = (float) ($row['certainty_value'] ?? 0);
+            if (abs($cf - $maxCf) > $eps) {
+                continue;
+            }
+            $did = $row['disease_id'] ?? null;
+            if ($did === null) {
+                continue;
+            }
+            $did = (int) $did;
+            if (isset($rowById[$did])) {
+                continue;
+            }
+            $rowById[$did] = $row;
+            $orderedIds[] = $did;
+        }
+
+        if ($orderedIds === []) {
+            return [];
+        }
+
+        $models = Disease::whereIn('id', $orderedIds)
+            ->where('plant_id', $plantId)
+            ->get()
+            ->keyBy('id');
+
+        $out = [];
+        foreach ($orderedIds as $did) {
+            if (! $models->has($did)) {
+                continue;
+            }
+            $dis = $models->get($did);
+            $row = $rowById[$did];
+            $out[] = [
+                'id' => $dis->id,
+                'name' => $dis->name,
+                'code' => $dis->code,
+                'description' => $dis->description,
+                'cause' => $dis->cause,
+                'solution' => $dis->solution ?: (string) ($row['solution'] ?? ''),
+                'prevention' => $dis->prevention ?: (string) ($row['prevention'] ?? ''),
+                'certainty_value' => (float) ($row['certainty_value'] ?? 0),
+                'matched_symptoms_count' => (int) ($row['matched_count'] ?? 0),
+            ];
+        }
+
+        return $out;
+    }
+}

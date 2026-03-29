@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class EducationalModule extends Model
@@ -13,7 +14,7 @@ class EducationalModule extends Model
     protected $fillable = [
         'title',
         'content',
-        'category',
+        'plant_id',
         'image',
         'content_images',
         'view_count',
@@ -44,7 +45,11 @@ class EducationalModule extends Model
         return $this->belongsToMany(User::class, 'bookmarks')
             ->withTimestamps();
     }
-}
 
+    public function plant(): BelongsTo
+    {
+        return $this->belongsTo(Plant::class);
+    }
+}
 
 

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\EducationalModule;
 use App\Models\Bookmark;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
@@ -84,12 +85,15 @@ class EducationalModuleController extends Controller
     public function index(Request $request)
     {
         try {
-            $category = $request->query('category');
+            $plantId = $request->query('plant_id');
             $search = trim((string) $request->query('search', ''));
-            $query = EducationalModule::where('is_active', true);
+            $query = EducationalModule::with('plant')->where('is_active', true);
             
-            if ($category) {
-                $query->where('category', $category);
+            if (is_numeric($plantId)) {
+                $id = (int) $plantId;
+                $query->where(function ($q) use ($id) {
+                    $q->where('plant_id', $id)->orWhereNull('plant_id');
+                });
             }
 
             if ($search !== '') {
@@ -101,7 +105,9 @@ class EducationalModuleController extends Controller
                 $query->where(function ($q) use ($pat, $patNorm, $patHashNorm, $search, $normalizedSearch) {
                     $q->whereRaw('LOWER(title) LIKE ?', [$pat])
                         ->orWhereRaw('LOWER(COALESCE(content, "")) LIKE ?', [$pat])
-                        ->orWhereRaw('LOWER(COALESCE(category, "")) LIKE ?', [$pat])
+                        ->orWhereHas('plant', function ($pq) use ($pat) {
+                            $pq->whereRaw('LOWER(name) LIKE ?', [$pat]);
+                        })
                         ->orWhereRaw('LOWER(CAST(vital_tags_json AS CHAR)) LIKE ?', [$pat]);
 
                     if ($normalizedSearch !== $search) {
@@ -144,12 +150,13 @@ class EducationalModuleController extends Controller
     public function show(Request $request, $id)
     {
         try {
-            $module = EducationalModule::findOrFail($id);
+            $module = EducationalModule::with('plant')->findOrFail($id);
             
             // Cek apakah user sudah bookmark
             $isBookmarked = false;
-            if (auth()->check()) {
-                $isBookmarked = Bookmark::where('user_id', auth()->id())
+            $user = $request->user();
+            if ($user instanceof User) {
+                $isBookmarked = Bookmark::where('user_id', $user->id)
                     ->where('educational_module_id', $id)
                     ->exists();
             }
@@ -187,10 +194,16 @@ class EducationalModuleController extends Controller
     /**
      * Bookmark modul edukasi
      */
-    public function bookmark($id)
+    public function bookmark(Request $request, $id)
     {
         try {
-            $user = auth()->user();
+            $user = $request->user();
+            if (! $user instanceof User) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated'
+                ], 401);
+            }
             
             $bookmark = Bookmark::firstOrCreate([
                 'user_id' => $user->id,
@@ -223,10 +236,16 @@ class EducationalModuleController extends Controller
     /**
      * Unbookmark modul edukasi
      */
-    public function unbookmark($id)
+    public function unbookmark(Request $request, $id)
     {
         try {
-            $user = auth()->user();
+            $user = $request->user();
+            if (! $user instanceof User) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated'
+                ], 401);
+            }
             
             Bookmark::where('user_id', $user->id)
                 ->where('educational_module_id', $id)
@@ -260,10 +279,16 @@ class EducationalModuleController extends Controller
     public function getBookmarks(Request $request)
     {
         try {
-            $user = auth()->user();
+            $user = $request->user();
+            if (! $user instanceof User) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated'
+                ], 401);
+            }
             
             $bookmarks = Bookmark::where('user_id', $user->id)
-                ->with('educationalModule')
+                ->with('educationalModule.plant')
                 ->orderBy('created_at', 'desc')
                 ->get()
                 ->map(function ($bookmark) use ($request) {
@@ -296,6 +321,3 @@ class EducationalModuleController extends Controller
         }
     }
 }
-
-
-

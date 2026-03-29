@@ -207,10 +207,6 @@
                 <div class="info-label">Email:</div>
                 <div class="info-value">{{ $user->email }}</div>
             </div>
-            <div class="info-row">
-                <div class="info-label">Nomor WhatsApp:</div>
-                <div class="info-value">{{ $user->whatsapp_number ?? '-' }}</div>
-            </div>
         </div>
     </div>
 
@@ -460,4 +456,3 @@
     </div>
 </body>
 </html>
-
