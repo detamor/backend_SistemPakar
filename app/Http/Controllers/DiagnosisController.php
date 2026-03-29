@@ -14,6 +14,86 @@ use Illuminate\Support\Facades\Validator;
 class DiagnosisController extends Controller
 {
     /**
+     * Lebih dari satu hipotesis tertinggi dengan CF yang sama: penyakit dengan nilai CF puncak yang sama, urut sesuai all_possibilities.
+     * Digunakan agar UI/PDF bisa menampilkan solusi lengkap untuk masing-masing hipotesis dengan CF tertinggi sama.
+     */
+    private function buildTiedTopDiseasesFromPossibilities(?array $possibilities, int $plantId): array
+    {
+        if (empty($possibilities)) {
+            return [];
+        }
+
+        $maxCf = -1.0;
+        foreach ($possibilities as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $cf = (float) ($row['certainty_value'] ?? 0);
+            if ($cf > $maxCf) {
+                $maxCf = $cf;
+            }
+        }
+
+        if ($maxCf < 0) {
+            return [];
+        }
+
+        $eps = 1e-4;
+        $orderedIds = [];
+        $rowById = [];
+        foreach ($possibilities as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $cf = (float) ($row['certainty_value'] ?? 0);
+            if (abs($cf - $maxCf) > $eps) {
+                continue;
+            }
+            $did = $row['disease_id'] ?? null;
+            if ($did === null) {
+                continue;
+            }
+            $did = (int) $did;
+            if (isset($rowById[$did])) {
+                continue;
+            }
+            $rowById[$did] = $row;
+            $orderedIds[] = $did;
+        }
+
+        if ($orderedIds === []) {
+            return [];
+        }
+
+        $models = Disease::whereIn('id', $orderedIds)
+            ->where('plant_id', $plantId)
+            ->get()
+            ->keyBy('id');
+
+        $out = [];
+        foreach ($orderedIds as $did) {
+            if (! $models->has($did)) {
+                continue;
+            }
+            $dis = $models->get($did);
+            $row = $rowById[$did];
+            $out[] = [
+                'id' => $dis->id,
+                'name' => $dis->name,
+                'code' => $dis->code,
+                'description' => $dis->description,
+                'cause' => $dis->cause,
+                'solution' => $dis->solution ?: (string) ($row['solution'] ?? ''),
+                'prevention' => $dis->prevention ?: (string) ($row['prevention'] ?? ''),
+                'certainty_value' => (float) ($row['certainty_value'] ?? 0),
+                'matched_symptoms_count' => (int) ($row['matched_count'] ?? 0),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
      * Mendapatkan daftar tanaman
      */
     public function getPlants()
@@ -367,6 +447,10 @@ class DiagnosisController extends Controller
                             'recommendation' => $diagnosis->recommendation ?? null,
                             'all_possibilities' => $diagnosis->all_possibilities_json ?? [],
                             'matched_symptoms_count' => $diagnosis->matched_symptoms_count ?? 0,
+                            'tied_diseases' => $this->buildTiedTopDiseasesFromPossibilities(
+                                $diagnosis->all_possibilities_json ?? [],
+                                (int) $diagnosis->plant_id
+                            ),
                         ];
                         
                         // Log untuk debugging
@@ -559,6 +643,10 @@ class DiagnosisController extends Controller
                     ];
                 })->toArray() : [],
                 'feedback' => $diagnosis->feedback,
+                'tied_diseases' => $this->buildTiedTopDiseasesFromPossibilities(
+                    $diagnosis->all_possibilities_json ?? [],
+                    (int) $diagnosis->plant_id
+                ),
             ];
 
             $this->addCorsHeaders($response = response()->json([
@@ -714,9 +802,15 @@ class DiagnosisController extends Controller
                 ->findOrFail($id);
 
             // Generate PDF using dompdf
+            $tiedTopDiseases = $this->buildTiedTopDiseasesFromPossibilities(
+                $diagnosis->all_possibilities_json ?? [],
+                (int) $diagnosis->plant_id
+            );
+
             $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('diagnosis.pdf', [
                 'diagnosis' => $diagnosis,
-                'user' => auth()->user()
+                'user' => auth()->user(),
+                'tiedTopDiseases' => $tiedTopDiseases,
             ]);
 
             $filename = 'diagnosis-' . $diagnosis->id . '-' . date('Y-m-d') . '.pdf';
