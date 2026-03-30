@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -15,7 +16,12 @@ class AdminMiddleware
      */
     public function handle(Request $request, Closure $next): Response
     {
-        if (!auth()->check() || !auth()->user()->isAdmin()) {
+        // Middleware admin untuk API Sanctum:
+        // - Gunakan $request->user() (hasil auth:sanctum) agar konsisten untuk SPA + Bearer token.
+        // - Jangan pakai auth()->check() (guard web) karena bisa membuat admin dianggap tidak login.
+        $user = $request->user();
+
+        if (! $user instanceof User || ! $user->isAdmin()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Unauthorized. Admin access required.'
@@ -25,6 +31,4 @@ class AdminMiddleware
         return $next($request);
     }
 }
-
-
 

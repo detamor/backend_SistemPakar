@@ -53,7 +53,14 @@ Route::prefix('public')->group(function () {
 });
 
 // Diagnosis Routes
+// Catatan penting:
+// - /api/diagnosis dibuat public supaya guest (tanpa login) bisa melakukan diagnosis.
+// - Endpoint riwayat/detail/pdf login tetap berada di group auth:sanctum.
+// - Endpoint guest (pdf-simple, pdf, whatsapp-link) bersifat public karena tidak punya diagnosis_id.
 Route::post('/diagnosis', [DiagnosisController::class, 'diagnose']);
+Route::post('/diagnosis/guest/pdf', [DiagnosisController::class, 'downloadGuestPdf']);
+Route::post('/diagnosis/guest/pdf-simple', [DiagnosisController::class, 'downloadGuestSimplePdf']);
+Route::post('/diagnosis/guest/whatsapp-link', [DiagnosisController::class, 'guestWhatsAppLink']);
 Route::prefix('diagnosis')->middleware('auth:sanctum')->group(function () {
     Route::get('/history', [DiagnosisController::class, 'getHistory']);
     Route::get('/{id}', [DiagnosisController::class, 'getDetail']);

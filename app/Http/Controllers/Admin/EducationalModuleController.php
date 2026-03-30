@@ -138,7 +138,7 @@ class EducationalModuleController extends Controller
     public function index(Request $request)
     {
         try {
-            $query = EducationalModule::with('plant')->query();
+            $query = EducationalModule::query()->with('plant');
 
             $plantId = $request->query('plant_id');
             if (is_numeric($plantId)) {

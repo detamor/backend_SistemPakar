@@ -6,6 +6,7 @@ use App\Models\EducationalModule;
 use App\Models\Bookmark;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
 
@@ -86,14 +87,20 @@ class EducationalModuleController extends Controller
     {
         try {
             $plantId = $request->query('plant_id');
+            $includeGeneralRaw = $request->query('include_general', '1');
+            $includeGeneral = !in_array(mb_strtolower((string) $includeGeneralRaw), ['0', 'false', 'no'], true);
             $search = trim((string) $request->query('search', ''));
             $query = EducationalModule::with('plant')->where('is_active', true);
             
             if (is_numeric($plantId)) {
                 $id = (int) $plantId;
-                $query->where(function ($q) use ($id) {
-                    $q->where('plant_id', $id)->orWhereNull('plant_id');
-                });
+                if ($includeGeneral) {
+                    $query->where(function ($q) use ($id) {
+                        $q->where('plant_id', $id)->orWhereNull('plant_id');
+                    });
+                } else {
+                    $query->where('plant_id', $id);
+                }
             }
 
             if ($search !== '') {
@@ -154,7 +161,10 @@ class EducationalModuleController extends Controller
             
             // Cek apakah user sudah bookmark
             $isBookmarked = false;
-            $user = $request->user();
+            $user = Auth::guard('sanctum')->user();
+            if (! $user instanceof User) {
+                $user = $request->user();
+            }
             if ($user instanceof User) {
                 $isBookmarked = Bookmark::where('user_id', $user->id)
                     ->where('educational_module_id', $id)

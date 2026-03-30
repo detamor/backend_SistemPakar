@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Models\EducationalModule;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class DashboardStatsController extends Controller
 {
@@ -120,6 +121,44 @@ class DashboardStatsController extends Controller
                     'updated_at' => optional($diagnosis->updated_at)->toISOString(),
                 ];
             })
+            ->values();
+
+        $guestNotes = collect(
+            DB::table('guest_evaluation_notes')
+                ->leftJoin('plants', 'plants.id', '=', 'guest_evaluation_notes.plant_id')
+                ->leftJoin('diseases', 'diseases.id', '=', 'guest_evaluation_notes.disease_id')
+                ->select([
+                    'guest_evaluation_notes.id',
+                    'guest_evaluation_notes.user_notes',
+                    'guest_evaluation_notes.created_at',
+                    'plants.name as plant_name',
+                    'diseases.name as disease_name',
+                ])
+                ->whereNotNull('guest_evaluation_notes.user_notes')
+                ->whereRaw('TRIM(guest_evaluation_notes.user_notes) <> ""')
+                ->latest('guest_evaluation_notes.created_at')
+                ->limit(12)
+                ->get()
+        )->map(function ($row) {
+            return [
+                'id' => (int) $row->id,
+                'diagnosis_id' => null,
+                'user_name' => 'Guest',
+                'plant_name' => $row->plant_name,
+                'disease_name' => $row->disease_name,
+                'user_notes' => trim((string) $row->user_notes),
+                'created_at' => $row->created_at ? Carbon::parse($row->created_at)->toISOString() : null,
+                'updated_at' => null,
+            ];
+        })->values();
+
+        $recentEvaluationNotes = $recentEvaluationNotes
+            ->merge($guestNotes)
+            ->sortByDesc(function ($item) {
+                return $item['created_at'] ?? '';
+            })
+            ->values()
+            ->take(12)
             ->values();
 
         return response()->json([
