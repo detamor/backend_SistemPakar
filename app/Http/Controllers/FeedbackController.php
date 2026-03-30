@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Feedback;
 use App\Models\Diagnosis;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
@@ -29,9 +30,9 @@ class FeedbackController extends Controller
                 ], 422);
             }
 
-            $user = auth()->user();
+            $user = $request->user();
 
-            if (!$user) {
+            if (! $user instanceof User) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Unauthenticated'
@@ -101,12 +102,12 @@ class FeedbackController extends Controller
     /**
      * Get feedback untuk diagnosis tertentu
      */
-    public function show($diagnosisId)
+    public function show(Request $request, $diagnosisId)
     {
         try {
-            $user = auth()->user();
+            $user = $request->user();
 
-            if (!$user) {
+            if (! $user instanceof User) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Unauthenticated'
@@ -160,4 +161,3 @@ class FeedbackController extends Controller
         }
     }
 }
-

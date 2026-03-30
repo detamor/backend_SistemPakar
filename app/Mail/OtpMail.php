@@ -29,9 +29,13 @@ class OtpMail extends Mailable
      */
     public function envelope(): Envelope
     {
-        $subject = $this->type === 'registration'
-            ? 'Kode OTP Registrasi - System Pakar'
-            : 'Kode OTP Reset Password - System Pakar';
+        if ($this->type === 'password_reset') {
+            $subject = 'Kode OTP Reset Password - System Pakar';
+        } elseif ($this->type === 'email_change') {
+            $subject = 'Kode OTP Ubah Email - System Pakar';
+        } else {
+            $subject = 'Kode OTP Registrasi - System Pakar';
+        }
 
         return new Envelope(
             subject: $subject,
