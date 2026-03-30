@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Models\EducationalModule;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class DashboardStatsController extends Controller
 {
@@ -71,7 +72,7 @@ class DashboardStatsController extends Controller
         $recentFeedbacks = Feedback::query()
             ->with([
                 'user:id,name',
-                'diagnosis:id,disease_id,plant_id',
+                'diagnosis:id,disease_id,plant_id,user_notes',
                 'diagnosis.disease:id,name',
                 'diagnosis.plant:id,name',
             ])
@@ -85,12 +86,79 @@ class DashboardStatsController extends Controller
                     'id' => $feedback->id,
                     'accuracy' => $feedback->accuracy,
                     'comment' => trim((string) $feedback->comment),
+                    'user_notes' => $feedback->diagnosis?->user_notes
+                        ? trim((string) $feedback->diagnosis->user_notes)
+                        : null,
                     'created_at' => optional($feedback->created_at)->toISOString(),
                     'user_name' => $feedback->user?->name ?? 'User',
                     'plant_name' => $feedback->diagnosis?->plant?->name,
                     'disease_name' => $feedback->diagnosis?->disease?->name,
                 ];
             })
+            ->values();
+
+        // Catatan evaluasi diagnosis terbaru untuk admin (terpisah dari feedback comment)
+        $recentEvaluationNotes = Diagnosis::query()
+            ->with([
+                'user:id,name',
+                'plant:id,name',
+                'disease:id,name',
+            ])
+            ->whereNotNull('user_notes')
+            ->whereRaw('TRIM(user_notes) <> ""')
+            ->latest()
+            ->limit(12)
+            ->get()
+            ->map(function ($diagnosis) {
+                return [
+                    'id' => $diagnosis->id,
+                    'diagnosis_id' => $diagnosis->id,
+                    'user_name' => $diagnosis->user?->name ?? 'User',
+                    'plant_name' => $diagnosis->plant?->name,
+                    'disease_name' => $diagnosis->disease?->name,
+                    'user_notes' => trim((string) $diagnosis->user_notes),
+                    'created_at' => optional($diagnosis->created_at)->toISOString(),
+                    'updated_at' => optional($diagnosis->updated_at)->toISOString(),
+                ];
+            })
+            ->values();
+
+        $guestNotes = collect(
+            DB::table('guest_evaluation_notes')
+                ->leftJoin('plants', 'plants.id', '=', 'guest_evaluation_notes.plant_id')
+                ->leftJoin('diseases', 'diseases.id', '=', 'guest_evaluation_notes.disease_id')
+                ->select([
+                    'guest_evaluation_notes.id',
+                    'guest_evaluation_notes.user_notes',
+                    'guest_evaluation_notes.created_at',
+                    'plants.name as plant_name',
+                    'diseases.name as disease_name',
+                ])
+                ->whereNotNull('guest_evaluation_notes.user_notes')
+                ->whereRaw('TRIM(guest_evaluation_notes.user_notes) <> ""')
+                ->latest('guest_evaluation_notes.created_at')
+                ->limit(12)
+                ->get()
+        )->map(function ($row) {
+            return [
+                'id' => (int) $row->id,
+                'diagnosis_id' => null,
+                'user_name' => 'Guest',
+                'plant_name' => $row->plant_name,
+                'disease_name' => $row->disease_name,
+                'user_notes' => trim((string) $row->user_notes),
+                'created_at' => $row->created_at ? Carbon::parse($row->created_at)->toISOString() : null,
+                'updated_at' => null,
+            ];
+        })->values();
+
+        $recentEvaluationNotes = $recentEvaluationNotes
+            ->merge($guestNotes)
+            ->sortByDesc(function ($item) {
+                return $item['created_at'] ?? '';
+            })
+            ->values()
+            ->take(12)
             ->values();
 
         return response()->json([
@@ -100,6 +168,7 @@ class DashboardStatsController extends Controller
                 'monthlyTrend' => $monthlyTrend,
                 'feedbackStats' => $feedbackStats,
                 'recentFeedbacks' => $recentFeedbacks,
+                'recentEvaluationNotes' => $recentEvaluationNotes,
             ]
         ]);
     }

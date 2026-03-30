@@ -4,11 +4,69 @@ namespace App\Http\Controllers;
 
 use App\Models\EducationalModule;
 use App\Models\Bookmark;
+use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Storage;
 
 class EducationalModuleController extends Controller
 {
+    protected function buildPublicFileUrl(Request $request, ?string $path): ?string
+    {
+        if (!$path) {
+            return null;
+        }
+
+        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+            $parsedPath = parse_url($path, PHP_URL_PATH);
+            if ($parsedPath && str_contains($parsedPath, '/storage/')) {
+                return rtrim($request->getSchemeAndHttpHost(), '/') . $parsedPath;
+            }
+            return $path;
+        }
+
+        $cleanPath = ltrim($path, '/');
+        if (str_starts_with($cleanPath, 'storage/')) {
+            $cleanPath = substr($cleanPath, strlen('storage/'));
+        }
+
+        return rtrim($request->getSchemeAndHttpHost(), '/') . Storage::url($cleanPath);
+    }
+
+    protected function formatModuleForResponse(Request $request, EducationalModule $module): array
+    {
+        $moduleData = $module->toArray();
+
+        if (!empty($moduleData['image'])) {
+            $moduleData['image'] = $this->buildPublicFileUrl($request, $moduleData['image']);
+        }
+
+        if (!empty($moduleData['content_images']) && is_array($moduleData['content_images'])) {
+            $moduleData['content_images'] = array_map(function ($path) use ($request) {
+                return $this->buildPublicFileUrl($request, $path);
+            }, $moduleData['content_images']);
+        }
+
+        return $moduleData;
+    }
+
+    /**
+     * Escape %, _, \ untuk digunakan di pola LIKE.
+     */
+    protected function escapeLikePattern(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
+    }
+
+    /**
+     * Pola LIKE case-insensitive: nilai user di-lower, kolom dibandingkan dengan LOWER(...).
+     */
+    protected function caseInsensitiveLikePattern(string $search): string
+    {
+        return '%'.$this->escapeLikePattern(mb_strtolower($search, 'UTF-8')).'%';
+    }
+
     /**
      * Helper method untuk menambahkan CORS headers ke response
      */
@@ -28,14 +86,49 @@ class EducationalModuleController extends Controller
     public function index(Request $request)
     {
         try {
-            $category = $request->query('category');
-            $query = EducationalModule::where('is_active', true);
+            $plantId = $request->query('plant_id');
+            $includeGeneralRaw = $request->query('include_general', '1');
+            $includeGeneral = !in_array(mb_strtolower((string) $includeGeneralRaw), ['0', 'false', 'no'], true);
+            $search = trim((string) $request->query('search', ''));
+            $query = EducationalModule::with('plant')->where('is_active', true);
             
-            if ($category) {
-                $query->where('category', $category);
+            if (is_numeric($plantId)) {
+                $id = (int) $plantId;
+                if ($includeGeneral) {
+                    $query->where(function ($q) use ($id) {
+                        $q->where('plant_id', $id)->orWhereNull('plant_id');
+                    });
+                } else {
+                    $query->where('plant_id', $id);
+                }
+            }
+
+            if ($search !== '') {
+                $normalizedSearch = ltrim($search, '#');
+                $pat = $this->caseInsensitiveLikePattern($search);
+                $patNorm = $this->caseInsensitiveLikePattern($normalizedSearch);
+                $patHashNorm = $this->caseInsensitiveLikePattern('#'.$normalizedSearch);
+
+                $query->where(function ($q) use ($pat, $patNorm, $patHashNorm, $search, $normalizedSearch) {
+                    $q->whereRaw('LOWER(title) LIKE ?', [$pat])
+                        ->orWhereRaw('LOWER(COALESCE(content, "")) LIKE ?', [$pat])
+                        ->orWhereHas('plant', function ($pq) use ($pat) {
+                            $pq->whereRaw('LOWER(name) LIKE ?', [$pat]);
+                        })
+                        ->orWhereRaw('LOWER(CAST(vital_tags_json AS CHAR)) LIKE ?', [$pat]);
+
+                    if ($normalizedSearch !== $search) {
+                        $q->orWhereRaw('LOWER(CAST(vital_tags_json AS CHAR)) LIKE ?', [$patNorm]);
+                    } else {
+                        $q->orWhereRaw('LOWER(CAST(vital_tags_json AS CHAR)) LIKE ?', [$patHashNorm]);
+                    }
+                });
             }
             
             $modules = $query->orderBy('created_at', 'desc')->paginate(10);
+            $modules->getCollection()->transform(function ($module) use ($request) {
+                return $this->formatModuleForResponse($request, $module);
+            });
             
             $this->addCorsHeaders($response = response()->json([
                 'success' => true,
@@ -61,25 +154,26 @@ class EducationalModuleController extends Controller
     /**
      * Mendapatkan detail modul edukasi
      */
-    public function show($id)
+    public function show(Request $request, $id)
     {
         try {
-            $module = EducationalModule::findOrFail($id);
-            
-            // Increment view count
-            $module->increment('view_count');
+            $module = EducationalModule::with('plant')->findOrFail($id);
             
             // Cek apakah user sudah bookmark
             $isBookmarked = false;
-            if (auth()->check()) {
-                $isBookmarked = Bookmark::where('user_id', auth()->id())
+            $user = Auth::guard('sanctum')->user();
+            if (! $user instanceof User) {
+                $user = $request->user();
+            }
+            if ($user instanceof User) {
+                $isBookmarked = Bookmark::where('user_id', $user->id)
                     ->where('educational_module_id', $id)
                     ->exists();
             }
             
             $this->addCorsHeaders($response = response()->json([
                 'success' => true,
-                'data' => $module,
+                'data' => $this->formatModuleForResponse($request, $module),
                 'is_bookmarked' => $isBookmarked
             ]));
             
@@ -110,10 +204,16 @@ class EducationalModuleController extends Controller
     /**
      * Bookmark modul edukasi
      */
-    public function bookmark($id)
+    public function bookmark(Request $request, $id)
     {
         try {
-            $user = auth()->user();
+            $user = $request->user();
+            if (! $user instanceof User) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated'
+                ], 401);
+            }
             
             $bookmark = Bookmark::firstOrCreate([
                 'user_id' => $user->id,
@@ -146,10 +246,16 @@ class EducationalModuleController extends Controller
     /**
      * Unbookmark modul edukasi
      */
-    public function unbookmark($id)
+    public function unbookmark(Request $request, $id)
     {
         try {
-            $user = auth()->user();
+            $user = $request->user();
+            if (! $user instanceof User) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated'
+                ], 401);
+            }
             
             Bookmark::where('user_id', $user->id)
                 ->where('educational_module_id', $id)
@@ -180,15 +286,29 @@ class EducationalModuleController extends Controller
     /**
      * Mendapatkan bookmark user
      */
-    public function getBookmarks()
+    public function getBookmarks(Request $request)
     {
         try {
-            $user = auth()->user();
+            $user = $request->user();
+            if (! $user instanceof User) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated'
+                ], 401);
+            }
             
             $bookmarks = Bookmark::where('user_id', $user->id)
-                ->with('educationalModule')
+                ->with('educationalModule.plant')
                 ->orderBy('created_at', 'desc')
-                ->get();
+                ->get()
+                ->map(function ($bookmark) use ($request) {
+                    $bookmarkData = $bookmark->toArray();
+                    if ($bookmark->educationalModule) {
+                        $bookmarkData['educational_module'] = $this->formatModuleForResponse($request, $bookmark->educationalModule);
+                    }
+                    return $bookmarkData;
+                })
+                ->values();
             
             $this->addCorsHeaders($response = response()->json([
                 'success' => true,
@@ -211,6 +331,3 @@ class EducationalModuleController extends Controller
         }
     }
 }
-
-
-

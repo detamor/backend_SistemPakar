@@ -15,8 +15,7 @@ class MaintenanceGuideSeeder extends Seeder
         \App\Models\EducationalModule::updateOrCreate(
             ['title' => 'Panduan Optimalisasi Pemeliharaan Anggrek'],
             [
-                'description' => 'Panduan langkah demi langkah untuk memastikan Anggrek Anda tumbuh subur dan berbunga indah.',
-                'content' => 'Anggrek memerlukan perhatian khusus pada akar dan kelembapan udara. Pastikan media tanam memiliki sirkulasi udara yang baik.',
+                'content' => "Panduan langkah demi langkah untuk memastikan Anggrek Anda tumbuh subur dan berbunga indah.\n\nAnggrek memerlukan perhatian khusus pada akar dan kelembapan udara. Pastikan media tanam memiliki sirkulasi udara yang baik.",
                 'category' => 'Pemeliharaan',
                 'is_maintenance_guide' => true,
                 'watering_info' => '2-3 kali seminggu (pagi hari)',
@@ -36,8 +35,7 @@ class MaintenanceGuideSeeder extends Seeder
         \App\Models\EducationalModule::updateOrCreate(
             ['title' => 'Seni Merawat Bonsai Terstruktur'],
             [
-                'description' => 'Mengoptimalkan pembentukan batang dan kesehatan akar bonsai untuk pemula.',
-                'content' => 'Bonsai bukan sekadar tanaman kecil, melainkan karya seni yang hidup yang membutuhkan pemeliharaan presisi.',
+                'content' => "Mengoptimalkan pembentukan batang dan kesehatan akar bonsai untuk pemula.\n\nBonsai bukan sekadar tanaman kecil, melainkan karya seni yang hidup yang membutuhkan pemeliharaan presisi.",
                 'category' => 'Pemeliharaan',
                 'is_maintenance_guide' => true,
                 'watering_info' => 'Setiap hari (jaga kelembapan)',
@@ -57,8 +55,7 @@ class MaintenanceGuideSeeder extends Seeder
         \App\Models\EducationalModule::updateOrCreate(
             ['title' => 'Rahasia Mawar Subur & Anti-Hama'],
             [
-                'description' => 'Meningkatkan intensitas pembungaan dan ketahanan terhadap penyakit pada tanaman Mawar.',
-                'content' => 'Mawar membutuhkan nutrisi yang kaya dan perlindungan dari jamur daun.',
+                'content' => "Meningkatkan intensitas pembungaan dan ketahanan terhadap penyakit pada tanaman Mawar.\n\nMawar membutuhkan nutrisi yang kaya dan perlindungan dari jamur daun.",
                 'category' => 'Pemeliharaan',
                 'is_maintenance_guide' => true,
                 'watering_info' => 'Setiap pagi (hindari membasahi daun)',

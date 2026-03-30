@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class EducationalModule extends Model
@@ -12,9 +13,8 @@ class EducationalModule extends Model
 
     protected $fillable = [
         'title',
-        'description',
         'content',
-        'category',
+        'plant_id',
         'image',
         'content_images',
         'view_count',
@@ -24,6 +24,7 @@ class EducationalModule extends Model
         'light_info',
         'humidity_info',
         'difficulty',
+        'vital_tags_json',
         'maintenance_steps_json',
     ];
 
@@ -32,6 +33,7 @@ class EducationalModule extends Model
         'is_active' => 'boolean',
         'is_maintenance_guide' => 'boolean',
         'content_images' => 'array',
+        'vital_tags_json' => 'array',
         'maintenance_steps_json' => 'array',
     ];
 
@@ -43,7 +45,11 @@ class EducationalModule extends Model
         return $this->belongsToMany(User::class, 'bookmarks')
             ->withTimestamps();
     }
-}
 
+    public function plant(): BelongsTo
+    {
+        return $this->belongsTo(Plant::class);
+    }
+}
 
 

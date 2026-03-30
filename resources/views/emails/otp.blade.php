@@ -23,18 +23,22 @@
         <tr>
             <td style="padding: 32px 24px;">
                 <h2 style="color: #1f2937; font-size: 18px; margin: 0 0 12px; font-weight: 600;">
-                    @if($type === 'registration')
-                        Verifikasi Akun Anda
-                    @else
+                    @if($type === 'password_reset')
                         Reset Password
+                    @elseif($type === 'email_change')
+                        Konfirmasi Ubah Email
+                    @else
+                        Verifikasi Akun Anda
                     @endif
                 </h2>
 
                 <p style="color: #6b7280; font-size: 14px; line-height: 1.6; margin: 0 0 24px;">
-                    @if($type === 'registration')
-                        Terima kasih telah mendaftar di System Pakar! Gunakan kode OTP berikut untuk menyelesaikan proses registrasi:
-                    @else
+                    @if($type === 'password_reset')
                         Anda telah meminta reset password. Gunakan kode OTP berikut untuk mengatur ulang password Anda:
+                    @elseif($type === 'email_change')
+                        Anda sedang mengubah email akun. Gunakan kode OTP berikut untuk mengonfirmasi email baru Anda:
+                    @else
+                        Terima kasih telah mendaftar di System Pakar! Gunakan kode OTP berikut untuk menyelesaikan proses registrasi:
                     @endif
                 </p>
 
