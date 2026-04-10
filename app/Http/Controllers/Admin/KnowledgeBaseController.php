@@ -565,11 +565,11 @@ class KnowledgeBaseController extends Controller
 
         $diseases = Disease::with(['symptoms'])
             ->where('plant_id', $plantId)
-            ->orderBy('code')
+            ->orderByRaw('LENGTH(code) ASC, code ASC')
             ->get();
 
         $symptoms = Symptom::query()
-            ->orderBy('code')
+            ->orderByRaw('LENGTH(code) ASC, code ASC')
             ->where(function ($q) use ($plantId) {
                 $q->where('plant_id', $plantId)
                     ->orWhereHas('diseases', function ($q2) use ($plantId) {
@@ -715,7 +715,7 @@ class KnowledgeBaseController extends Controller
      */
     public function getSymptoms()
     {
-        $symptoms = Symptom::all();
+        $symptoms = Symptom::orderByRaw('LENGTH(code) ASC, code ASC')->get();
         return response()->json(['success' => true, 'data' => $symptoms]);
     }
 
